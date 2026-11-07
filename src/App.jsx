@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box, Check,
@@ -55,6 +55,37 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, launching, setL
   </>;
 }
 
+
+function Catalog({ packs }) {
+  const [q,setQ]=useState("");
+  const [hits,setHits]=useState([]);
+  const [busy,setBusy]=useState(false);
+  const [error,setError]=useState("");
+  useEffect(()=>{
+    const ctrl=new AbortController();
+    const timer=setTimeout(async()=>{
+      setBusy(true); setError("");
+      try {
+        const p=new URLSearchParams({query:q,facets:JSON.stringify([[packs?"project_type:modpack":"project_type:mod"]]),limit:"24"});
+        const r=await fetch("https://api.modrinth.com/v2/search?"+p,{signal:ctrl.signal});
+        if(!r.ok) throw new Error("Catalog request failed");
+        const data=await r.json(); setHits(data.hits||[]);
+      } catch(e) { if(e.name!=="AbortError") setError("Unable to load Modrinth results. Check your connection and retry."); }
+      finally { if(!ctrl.signal.aborted) setBusy(false); }
+    },250);
+    return ()=>{clearTimeout(timer);ctrl.abort();};
+  },[q,packs]);
+  return <section className="catalog-page"><div className="eyebrow">MODRINTH CATALOG · LIVE SEARCH</div><h2>{packs?"Discover modpacks":"Discover mods"}</h2><p>Search public projects and open their Modrinth pages for versions and downloads.</p><div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={packs?"Search modpacks":"Search mods"}/></div>{busy&&<div className="catalog-note">Loading results…</div>}{error&&<div className="catalog-note error">{error}</div>}<div className="catalog-grid">{hits.map(x=><article className="catalog-card" key={x.project_id}>{x.icon_url?<img src={x.icon_url} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<h3>{x.title}</h3><p>{x.description}</p><div className="catalog-meta"><span>{Number(x.downloads||0).toLocaleString()} downloads</span><a href={"https://modrinth.com/"+(packs?"modpack/":"mod/")+x.slug} target="_blank" rel="noreferrer">View project ↗</a></div></article>)}</div></section>;
+}
+function LocalInstances() {
+  const [items,setItems]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.instances")||"[]")}catch{return[]}});
+  const [name,setName]=useState("");
+  const [version,setVersion]=useState("1.21.4");
+  useEffect(()=>{localStorage.setItem("nova.instances",JSON.stringify(items))},[items]);
+  const add=()=>{if(!name.trim())return;setItems(a=>[...a,{id:Date.now(),name:name.trim(),version}]);setName("")};
+  return <section className="local-instances"><div className="eyebrow">LOCAL PROFILES</div><h2>Your instances</h2><p>Create local profiles to organize your Minecraft setups. Game installation and launching are still in development.</p><div className="instance-create"><input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Instance name"/><select value={version} onChange={e=>setVersion(e.target.value)}>{versions.map(v=><option key={v}>{v}</option>)}</select><button className="primary-btn" onClick={add} disabled={!name.trim()}><Plus size={14}/> Create</button></div>{items.length===0?<div className="catalog-note">No profiles yet. Create your first instance above.</div>:items.map(x=><div className="instance-entry" key={x.id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{x.name}</b><span>Minecraft Java · {x.version}</span></div><button className="delete-entry" onClick={()=>setItems(a=>a.filter(y=>y.id!==x.id))}>Delete</button></div>)}</section>;
+}
+
 function EmptyPage({ page, setPage }) {
   const content = {
     instances: { icon: Layers3, title: "Your instances", desc: "Keep separate Minecraft versions, mod loaders, and configurations organized.", action: "Create an instance", note: "Instance installation is not connected yet." },
@@ -73,5 +104,5 @@ export default function App() {
   const [launching, setLaunching] = useState(false);
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} launching={launching} setLaunching={setLaunching}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} launching={launching} setLaunching={setLaunching}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
