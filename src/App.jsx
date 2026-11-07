@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box, Check,
   ChevronDown, CircleHelp, Compass, Cpu, Gamepad2, Gauge, HardDrive,
@@ -25,7 +26,19 @@ function Sidebar({ page, setPage }) {
 }
 
 function Topbar({ title, subtitle }) {
-  return <header className="topbar"><div><div className="eyebrow">NOVA / {title.toUpperCase()}</div><h1>{title}</h1><p>{subtitle}</p></div><div className="top-actions"><button className="icon-btn" title="Notifications"><Bell size={17}/><i/></button><button className="icon-btn" title="Settings"><Settings size={17}/></button><div className="top-avatar">G</div></div></header>;
+  const win = getCurrentWindow();
+  return <header className="topbar" data-tauri-drag-region>
+    <div data-tauri-drag-region><div className="eyebrow">NOVA / {title.toUpperCase()}</div><h1>{title}</h1><p>{subtitle}</p></div>
+    <div className="top-actions">
+      <button className="icon-btn" title="Notifications"><Bell size={17}/><i/></button>
+      <div className="top-avatar">G</div>
+      <div className="window-controls">
+        <button title="Minimize" onClick={() => win.minimize()}><span>−</span></button>
+        <button title="Maximize" onClick={() => win.toggleMaximize()}><span>□</span></button>
+        <button className="close-window" title="Close" onClick={() => win.close()}><X size={14}/></button>
+      </div>
+    </div>
+  </header>;
 }
 
 function Home({ onNavigate, selectedVersion, setSelectedVersion, launching, setLaunching }) {
