@@ -58,6 +58,8 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, launching, setL
 
 function Catalog({ packs }) {
   const [q,setQ]=useState("");
+  const [provider,setProvider]=useState("modrinth");
+  const [apiKey,setApiKey]=useState("");
   const [hits,setHits]=useState([]);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
@@ -66,16 +68,51 @@ function Catalog({ packs }) {
     const timer=setTimeout(async()=>{
       setBusy(true); setError("");
       try {
-        const p=new URLSearchParams({query:q,facets:JSON.stringify([[packs?"project_type:modpack":"project_type:mod"]]),limit:"24"});
-        const r=await fetch("https://api.modrinth.com/v2/search?"+p,{signal:ctrl.signal});
-        if(!r.ok) throw new Error("Catalog request failed");
-        const data=await r.json(); setHits(data.hits||[]);
-      } catch(e) { if(e.name!=="AbortError") setError("Unable to load Modrinth results. Check your connection and retry."); }
+        let results=[];
+        if(provider==="modrinth") {
+          const p=new URLSearchParams({query:q,facets:JSON.stringify([[packs?"project_type:modpack":"project_type:mod"]]),limit:"24"});
+          const r=await fetch("https://api.modrinth.com/v2/search?"+p,{signal:ctrl.signal});
+          if(!r.ok) throw new Error("Modrinth catalog request failed");
+          const data=await r.json();
+          results=(data.hits||[]).map(x=>({id:x.project_id,title:x.title,description:x.description,downloads:x.downloads,image:x.icon_url,url:"https://modrinth.com/"+(packs?"modpack/":"mod/")+x.slug}));
+        } else {
+          if(!apiKey.trim()) { setHits([]); setError("Enter your CurseForge API key to search its official catalog."); setBusy(false); return; }
+          const p=new URLSearchParams({gameId:"432",classId:packs?"4471":"6",pageSize:"24",sortField:"2",sortOrder:"desc"});
+          if(q.trim()) p.set("searchFilter",q.trim());
+          const r=await fetch("https://api.curseforge.com/v1/mods/search?"+p,{headers:{"x-api-key":apiKey.trim(),"Accept":"application/json"},signal:ctrl.signal});
+          if(r.status===403) throw new Error("CurseForge rejected this API key. Check that it is valid and approved for API access.");
+          if(r.status===401) throw new Error("CurseForge API key is missing or invalid.");
+          if(!r.ok) throw new Error("CurseForge catalog request failed ("+r.status+").");
+          const data=await r.json();
+          results=(data.data||[]).map(x=>({id:String(x.id),title:x.name,description:x.summary||"No description provided.",downloads:x.downloadCount,image:x.logo?.thumbnailUrl,url:x.links?.websiteUrl||"https://www.curseforge.com/minecraft/"+(packs?"modpacks":"mc-mods")+"/"+x.slug}));
+        }
+        setHits(results);
+      } catch(e) { if(e.name!=="AbortError") setError(e.message||"Unable to load catalog. Check your connection and retry."); }
       finally { if(!ctrl.signal.aborted) setBusy(false); }
     },250);
     return ()=>{clearTimeout(timer);ctrl.abort();};
-  },[q,packs]);
-  return <section className="catalog-page"><div className="eyebrow">MODRINTH CATALOG · LIVE SEARCH</div><h2>{packs?"Discover modpacks":"Discover mods"}</h2><p>Search public projects and open their Modrinth pages for versions and downloads.</p><div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={packs?"Search modpacks":"Search mods"}/></div>{busy&&<div className="catalog-note">Loading results…</div>}{error&&<div className="catalog-note error">{error}</div>}<div className="catalog-grid">{hits.map(x=><article className="catalog-card" key={x.project_id}>{x.icon_url?<img src={x.icon_url} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<h3>{x.title}</h3><p>{x.description}</p><div className="catalog-meta"><span>{Number(x.downloads||0).toLocaleString()} downloads</span><a href={"https://modrinth.com/"+(packs?"modpack/":"mod/")+x.slug} target="_blank" rel="noreferrer">View project ↗</a></div></article>)}</div></section>;
+  },[q,packs,provider,apiKey]);
+  return <section className="catalog-page">
+    <div className="eyebrow">{provider==="modrinth"?"MODRINTH":"CURSEFORGE"} CATALOG · LIVE SEARCH</div>
+    <h2>{packs?"Discover modpacks":"Discover mods"}</h2>
+    <p>Search either catalog and open the project's page to review files and downloads.</p>
+    <div className="catalog-toolbar">
+      <div className="catalog-provider" role="group" aria-label="Catalog provider">
+        <button className={provider==="modrinth"?"provider-choice selected":"provider-choice"} onClick={()=>setProvider("modrinth")}>Modrinth</button>
+        <button className={provider==="curseforge"?"provider-choice selected":"provider-choice"} onClick={()=>setProvider("curseforge")}>CurseForge</button>
+      </div>
+    </div>
+    {provider==="curseforge"&&<div className="curseforge-key">
+      <label htmlFor="curseforge-api-key">CURSEFORGE API KEY</label>
+      <input id="curseforge-api-key" type="password" autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="Paste your CurseForge API key"/>
+      <span>Your key stays in this app session and is not saved to NOVA's repository.</span>
+    </div>}
+    <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={packs?"Search modpacks":"Search mods"}/></div>
+    {busy&&<div className="catalog-note">Loading {provider==="modrinth"?"Modrinth":"CurseForge"} results…</div>}
+    {error&&<div className="catalog-note error">{error}</div>}
+    {!busy&&!error&&hits.length===0&&<div className="catalog-note">No matching projects found.</div>}
+    <div className="catalog-grid">{hits.map(x=><article className="catalog-card" key={x.id}>{x.image?<img src={x.image} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<h3>{x.title}</h3><p>{x.description}</p><div className="catalog-meta"><span>{Number(x.downloads||0).toLocaleString()} downloads</span><a href={x.url} target="_blank" rel="noreferrer">View project ↗</a></div></article>)}</div>
+  </section>;
 }
 function LocalInstances() {
   const [items,setItems]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.instances")||"[]")}catch{return[]}});
