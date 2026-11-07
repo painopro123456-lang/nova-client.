@@ -1,0 +1,35 @@
+name: NOVA In-Game Mod Build
+on:
+  push:
+    paths:
+      - "nova-mod/**"
+      - ".github/workflows/nova-mod-build.yml"
+  pull_request:
+    paths:
+      - "nova-mod/**"
+      - ".github/workflows/nova-mod-build.yml"
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: nova-mod
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.5.1"
+      - name: Build Fabric mod
+        run: gradle build
+      - name: Upload mod jar
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-in-game-mod
+          path: nova-mod/build/libs/*.jar
+          if-no-files-found: error
