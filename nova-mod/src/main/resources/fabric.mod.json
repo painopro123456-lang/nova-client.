@@ -1,0 +1,10 @@
+{
+  "schemaVersion": 1,
+  "id": "nova",
+  "version": "${version}",
+  "name": "NOVA In-Game",
+  "description": "A custom in-game NOVA mod menu.",
+  "environment": "client",
+  "entrypoints": { "client": ["gg.nova.client.NovaClient"] },
+  "depends": { "fabricloader": ">=0.19.3", "minecraft": "~26.2", "java": ">=25", "fabric-api": "*" }
+}
