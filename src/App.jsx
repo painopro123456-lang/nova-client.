@@ -170,7 +170,7 @@ function Catalog({ packs }) {
       <h3>{x.title}</h3><p>{x.description}</p>
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
       {packs&&<div className="pack-install-row">{installed[String(x.id)]
-        ? <button className="primary-btn" onClick={()=>launchPack(installed[String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Play installed pack"}</button>
+        ? <button className="primary-btn" onClick={()=>launchPack(installed[String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Install & Play"}</button>
         : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
     </article>)}</div>}
     {versionProject&&<div className="pack-version-backdrop" role="presentation" onClick={()=>!packVersionsBusy&&setVersionProject(null)}>
