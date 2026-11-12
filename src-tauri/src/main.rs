@@ -153,8 +153,17 @@ async fn launch_minecraft(version: String) -> Result<(), String> {
     let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
         .get_password()
         .map_err(|_| "Sign in with your Microsoft account before launching Minecraft.".to_string())?;
-    let account: Account = serde_json::from_str(&account_json)
+    let saved_account: Account = serde_json::from_str(&account_json)
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
+    let auth = Authenticator::new()
+        .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
+    let account = auth.refresh(&saved_account).await
+        .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
+    let refreshed_json = serde_json::to_string(&account)
+        .map_err(|e| format!("Could not update the saved account: {e}"))?;
+    credential_entry(MINECRAFT_ACCOUNT_USER)?
+        .set_password(&refreshed_json)
+        .map_err(|e| format!("Could not update the secure account store: {e}"))?;
 
     let local_app_data = std::env::var("LOCALAPPDATA")
         .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
