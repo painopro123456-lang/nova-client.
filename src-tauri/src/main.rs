@@ -470,6 +470,30 @@ async fn install_curseforge_modpack(mod_id: String, instance_name: String, file_
 
 
 #[tauri::command]
+fn create_instance(instance_name: String, display_name: String, version: String, loader: String) -> Result<Value, String> {
+    let name = safe_instance_name(&instance_name)?;
+    let version = version.trim();
+    if version.is_empty() || version.eq_ignore_ascii_case("null") || version.eq_ignore_ascii_case("undefined") {
+        return Err("Choose a valid Minecraft version.".into());
+    }
+    let loader = loader.to_ascii_lowercase();
+    if !matches!(loader.as_str(), "vanilla" | "fabric" | "forge" | "neoforge" | "quilt" | "legacyfabric") {
+        return Err(format!("Unsupported mod loader '{loader}'."));
+    }
+    let folder = instance_folder(&name)?;
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    let metadata = json!({
+        "instanceName": name,
+        "name": display_name.trim(),
+        "minecraftVersion": version,
+        "loader": loader,
+        "loaderVersion": if loader == "vanilla" { String::new() } else { "latest".to_owned() },
+        "source": "custom"
+    });
+    save_instance_metadata(&folder, metadata)
+}
+
+#[tauri::command]
 fn delete_instance(instance_name: String) -> Result<(), String> {
     let folder = instance_folder(&instance_name)?;
     if folder.exists() {
@@ -491,6 +515,7 @@ fn main() {
             install_modrinth_modpack,
             curseforge_modpack_versions,
             install_curseforge_modpack,
+            create_instance,
             delete_instance
         ])
         .run(tauri::generate_context!())
