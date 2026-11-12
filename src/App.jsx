@@ -198,7 +198,7 @@ function Catalog({ packs }) {
     </div>
     {busy&&<div className="catalog-state"><div className="loading-orbit"/><b>Finding great projects</b><span>Searching {provider==="modrinth"?"Modrinth":"CurseForge"}…</span></div>}
     {error&&<div className="catalog-note error"><CircleHelp size={16}/><span>{error}</span></div>}
-    {packActionMessage&&packs&&<div className="catalog-note"><span>{packActionMessage}</span></div>}}
+    {packActionMessage&&packs&&<div className="catalog-note"><span>{packActionMessage}</span></div>}
     {!busy&&!error&&hits.length===0&&<div className="catalog-state"><div className="empty-library"><Blocks size={25}/></div><b>No projects found</b><span>Try another search or switch catalog source.</span></div>}
     {!busy&&hits.length>0&&<div className="catalog-results-label"><span>{hits.length} PROJECTS ON THIS PAGE</span><span>PAGE {String(page+1).padStart(2,"0")}</span></div>}
     <div className="catalog-grid">{hits.map((x,i)=><article className="catalog-card" key={x.id}>
