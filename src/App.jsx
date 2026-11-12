@@ -71,6 +71,10 @@ function Catalog({ packs }) {
   const [installed,setInstalled]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.installedPacks")||"{}")}catch{return{}}});
   const [installingId,setInstallingId]=useState("");
   const [packActionMessage,setPackActionMessage]=useState("");
+  const [versionProject,setVersionProject]=useState(null);
+  const [packVersions,setPackVersions]=useState([]);
+  const [packVersionsBusy,setPackVersionsBusy]=useState(false);
+  const [selectedPackVersion,setSelectedPackVersion]=useState("");
 
   useEffect(()=>{
     let alive=true;
@@ -109,16 +113,35 @@ function Catalog({ packs }) {
 
   useEffect(()=>{localStorage.setItem("nova.installedPacks",JSON.stringify(installed));},[installed]);
 
-  const installPack=async(project)=>{
-    const key=String(project.id);
+  const choosePackVersion=async(project)=>{
+    setVersionProject(project);setPackVersions([]);setSelectedPackVersion("");setPackVersionsBusy(true);setPackActionMessage("");
+    try{
+      let versions=[];
+      if(provider==="modrinth"){
+        const response=await fetch("https://api.modrinth.com/v2/project/"+encodeURIComponent(project.id)+"/version");
+        if(!response.ok)throw new Error("Could not load modpack versions from Modrinth.");
+        const data=await response.json();
+        versions=(data||[]).map(v=>({id:v.id,label:(v.name||v.version_number||v.id)+" · MC "+(v.game_versions||[]).join(", ")+" · "+(v.loaders||[]).join("/"),published:v.date_published||""}));
+      }else{
+        const data=await invoke("curseforge_modpack_versions",{modId:String(project.id)});
+        versions=(data||[]).map(v=>({id:String(v.id),label:(v.displayName||v.fileName||("File "+v.id))+" · MC "+((v.gameVersions||[]).join(", ")||"version not listed"),published:v.fileDate||""}));
+      }
+      if(!versions.length)throw new Error("This modpack has no downloadable versions.");
+      setPackVersions(versions);setSelectedPackVersion(versions[0].id);
+    }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Could not load modpack versions."));setVersionProject(null);}
+    finally{setPackVersionsBusy(false);}
+  };
+  const installPack=async()=>{
+    if(!versionProject||!selectedPackVersion)return;
+    const project=versionProject,key=String(project.id);
     const instanceName=(project.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,32)||"modpack")+"-"+Date.now().toString().slice(-6);
-    setInstallingId(key);setPackActionMessage(`Preparing ${project.title}… This can download a large number of files.`);
+    setInstallingId(key);setVersionProject(null);setPackActionMessage("Installing "+project.title+"… This may download a large number of files.");
     try{
       const metadata=provider==="modrinth"
-        ? await invoke("install_modrinth_modpack",{projectId:key,instanceName})
-        : await invoke("install_curseforge_modpack",{modId:key,instanceName});
+        ? await invoke("install_modrinth_modpack",{projectId:key,instanceName,versionId:selectedPackVersion})
+        : await invoke("install_curseforge_modpack",{modId:key,instanceName,fileId:Number(selectedPackVersion)});
       setInstalled(old=>({...old,[key]:metadata}));
-      setPackActionMessage(`${metadata.name||project.title} installed. ${metadata.minecraftVersion} · ${metadata.loader}${metadata.loaderVersion?` ${metadata.loaderVersion}`:""}.`);
+      setPackActionMessage((metadata.name||project.title)+" installed · Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+".");
     }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Modpack installation failed."));}
     finally{setInstallingId("");}
   };
@@ -184,8 +207,15 @@ function Catalog({ packs }) {
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
       {packs&&<div className="pack-install-row">{installed[String(x.id)]
         ? <button className="primary-btn" onClick={()=>launchPack(installed[String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Play installed pack"}</button>
-        : <button className="primary-btn" onClick={()=>installPack(x)} disabled={Boolean(installingId)|| (provider==="curseforge"&&!keySaved)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…":"Install modpack"}</button>}</div>}
+        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)|| (provider==="curseforge"&&!keySaved)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
     </article>)}</div>}
+    {versionProject&&<div className="pack-version-backdrop" role="presentation" onClick={()=>!packVersionsBusy&&setVersionProject(null)}>
+      <section className="pack-version-dialog" role="dialog" aria-modal="true" aria-labelledby="pack-version-title" onClick={e=>e.stopPropagation()}>
+        <div className="eyebrow">MODPACK INSTALLER</div><h3 id="pack-version-title">Choose a version</h3><p>Select the exact modpack release you want NOVA to install.</p>
+        {packVersionsBusy?<div className="catalog-state compact"><div className="loading-orbit"/><span>Loading available versions…</span></div>
+          : <><label className="pack-version-label" htmlFor="pack-version-select">MODPACK VERSION</label><select id="pack-version-select" className="pack-version-select" value={selectedPackVersion} onChange={e=>setSelectedPackVersion(e.target.value)}>{packVersions.map(v=><option key={v.id} value={v.id}>{v.label}</option>)}</select><div className="pack-version-meta">{packVersions.find(v=>v.id===selectedPackVersion)?.published ? "Published "+new Date(packVersions.find(v=>v.id===selectedPackVersion).published).toLocaleDateString() : "Latest versions are listed first"}</div><div className="pack-version-actions"><button className="secondary-btn" onClick={()=>setVersionProject(null)}>Cancel</button><button className="primary-btn" onClick={installPack} disabled={!selectedPackVersion}><ArrowDownToLine size={14}/> Install selected version</button></div></>}
+      </section>
+    </div>}
     <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||hits.length===0} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
   </section>;
 }
