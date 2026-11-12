@@ -38,6 +38,39 @@ jobs:
         working-directory: D:/a/nova-src
         run: npm install
 
+      - name: Generate Windows app icon
+        shell: pwsh
+        working-directory: D:/a/nova-src
+        run: |
+          Add-Type -AssemblyName System.Drawing
+          $iconDir = Join-Path (Get-Location) "src-tauri/icons"
+          New-Item -ItemType Directory -Force -Path $iconDir | Out-Null
+          $bitmap = New-Object System.Drawing.Bitmap 256, 256
+          $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+          $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+          $graphics.Clear([System.Drawing.Color]::FromArgb(12, 15, 34))
+          $rect = New-Object System.Drawing.Rectangle 12, 12, 232, 232
+          $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rect, [System.Drawing.Color]::FromArgb(125, 82, 255), [System.Drawing.Color]::FromArgb(35, 205, 230), 45)
+          $graphics.FillEllipse($brush, $rect)
+          $font = New-Object System.Drawing.Font("Segoe UI", 104, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
+          $textBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+          $format = New-Object System.Drawing.StringFormat
+          $format.Alignment = [System.Drawing.StringAlignment]::Center
+          $format.LineAlignment = [System.Drawing.StringAlignment]::Center
+          $graphics.DrawString("N", $font, $textBrush, (New-Object System.Drawing.RectangleF 12, 10, 232, 232), $format)
+          $handle = $bitmap.GetHicon()
+          $icon = [System.Drawing.Icon]::FromHandle($handle)
+          $stream = [System.IO.File]::Create((Join-Path $iconDir "icon.ico"))
+          $icon.Save($stream)
+          $stream.Dispose()
+          $icon.Dispose()
+          $graphics.Dispose()
+          $bitmap.Dispose()
+          $font.Dispose()
+          $brush.Dispose()
+          $textBrush.Dispose()
+          $format.Dispose()
+
       - name: Build NOVA Windows installer
         working-directory: D:/a/nova-src
         run: npm run tauri -- build
