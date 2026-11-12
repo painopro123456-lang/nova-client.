@@ -476,6 +476,16 @@ async fn install_curseforge_modpack(mod_id: String, instance_name: String) -> Re
 }
 
 
+#[tauri::command]
+fn delete_instance(instance_name: String) -> Result<(), String> {
+    let folder = instance_folder(&instance_name)?;
+    if folder.exists() {
+        std::fs::remove_dir_all(&folder)
+            .map_err(|e| format!("Could not delete instance files: {e}"))?;
+    }
+    Ok(())
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -489,7 +499,8 @@ fn main() {
             minecraft_versions,
             launch_minecraft,
             install_modrinth_modpack,
-            install_curseforge_modpack
+            install_curseforge_modpack,
+            delete_instance
         ])
         .run(tauri::generate_context!())
         .expect("error while running NOVA Client");
