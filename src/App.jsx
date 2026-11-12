@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box, Check,
+  Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box,
   ChevronDown, CircleHelp, Compass, Cpu, Gamepad2, Gauge, HardDrive,
   Layers3, LayoutDashboard, Monitor, Moon, MoreHorizontal, Play, Plus,
   Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Users,
@@ -61,9 +61,6 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versi
 function Catalog({ packs }) {
   const [q,setQ]=useState("");
   const [provider,setProvider]=useState("modrinth");
-  const [apiKey,setApiKey]=useState("");
-  const [keySaved,setKeySaved]=useState(false);
-  const [keySaving,setKeySaving]=useState(false);
   const [hits,setHits]=useState([]);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
@@ -77,20 +74,8 @@ function Catalog({ packs }) {
   const [selectedPackVersion,setSelectedPackVersion]=useState("");
 
   useEffect(()=>{
-    let alive=true;
-    invoke("has_curseforge_key").then(value=>{if(alive)setKeySaved(Boolean(value));}).catch(()=>{if(alive)setKeySaved(false);});
-    return ()=>{alive=false;};
-  },[]);
-
-  useEffect(()=>{
     const ctrl=new AbortController();
     const timer=setTimeout(async()=>{
-      if(provider==="curseforge"&&!keySaved){
-        setHits([]);
-        setBusy(false);
-        setError("Add your CurseForge API key below. NOVA will store it in Windows Credential Manager.");
-        return;
-      }
       setBusy(true); setError("");
       try {
         let results=[];
@@ -109,7 +94,7 @@ function Catalog({ packs }) {
       finally { if(!ctrl.signal.aborted) setBusy(false); }
     },250);
     return ()=>{clearTimeout(timer);ctrl.abort();};
-  },[q,packs,provider,keySaved,page]);
+  },[q,packs,provider,page]);
 
   useEffect(()=>{localStorage.setItem("nova.installedPacks",JSON.stringify(installed));},[installed]);
 
@@ -154,20 +139,6 @@ function Catalog({ packs }) {
     finally{setInstallingId("");}
   };
 
-  const saveKey=async()=>{
-    if(!apiKey.trim())return;
-    setKeySaving(true);setError("");
-    try{
-      await invoke("save_curseforge_key",{apiKey:apiKey.trim()});
-      setApiKey("");setKeySaved(true);setPage(0);
-    }catch(e){setError(typeof e==="string"?e:(e.message||"Could not save the key to Windows Credential Manager."));}
-    finally{setKeySaving(false);}
-  };
-  const forgetKey=async()=>{
-    try{await invoke("delete_curseforge_key");setKeySaved(false);setHits([]);setError("CurseForge key removed from Windows Credential Manager.");}
-    catch(e){setError(typeof e==="string"?e:(e.message||"Could not remove the saved key."));}
-  };
-
   return <section className="catalog-page">
     <div className="catalog-hero">
       <div className="catalog-hero-copy">
@@ -185,13 +156,6 @@ function Catalog({ packs }) {
         <button className={provider==="curseforge"?"provider-choice selected":"provider-choice"} onClick={()=>{setProvider("curseforge");setPage(0);}}>CurseForge</button>
       </div>
     </div>
-    {provider==="curseforge"&&<div className="curseforge-key">
-      <div className="key-heading"><div className="key-lock"><ShieldCheck size={16}/></div><div><b>CurseForge connection</b><span>Connect your approved API key to search the catalog.</span></div></div>
-      {keySaved
-        ? <div className="key-saved-row"><span><Check size={14}/> Connected · stored in Windows Credential Manager</span><button className="delete-entry" onClick={forgetKey}>Remove key</button></div>
-        : <div className="key-input-row"><input id="curseforge-api-key" type="password" autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveKey()} placeholder="Paste your CurseForge API key"/><button className="primary-btn key-save-button" onClick={saveKey} disabled={!apiKey.trim()||keySaving}>{keySaving?"Saving…":"Connect securely"}</button></div>}
-      <span className="key-footnote">Your key stays on this PC and is never placed in NOVA's frontend source.</span>
-    </div>}
     <div className="catalog-search-row">
       <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks, themes, adventures…":"Search mods, performance, shaders, utilities…"}/>{q&&<button className="clear-search" onClick={()=>setQ("")} aria-label="Clear search"><X size={14}/></button>}</div>
       <div className="catalog-source-pill"><span className="source-dot"/> {provider==="modrinth"?"MODRINTH INDEX":"CURSEFORGE API"}</div>
@@ -207,7 +171,7 @@ function Catalog({ packs }) {
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
       {packs&&<div className="pack-install-row">{installed[String(x.id)]
         ? <button className="primary-btn" onClick={()=>launchPack(installed[String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Play installed pack"}</button>
-        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)|| (provider==="curseforge"&&!keySaved)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
+        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
     </article>)}</div>}
     {versionProject&&<div className="pack-version-backdrop" role="presentation" onClick={()=>!packVersionsBusy&&setVersionProject(null)}>
       <section className="pack-version-dialog" role="dialog" aria-modal="true" aria-labelledby="pack-version-title" onClick={e=>e.stopPropagation()}>
