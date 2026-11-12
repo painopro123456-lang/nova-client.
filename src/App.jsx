@@ -1,6 +1,7 @@
 import { MICROSOFT_CLIENT_ID } from "./config";
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box, Check,
   ChevronDown, CircleHelp, Compass, Cpu, Gamepad2, Gauge, HardDrive,
@@ -61,58 +62,85 @@ function Catalog({ packs }) {
   const [q,setQ]=useState("");
   const [provider,setProvider]=useState("modrinth");
   const [apiKey,setApiKey]=useState("");
+  const [keySaved,setKeySaved]=useState(false);
+  const [keySaving,setKeySaving]=useState(false);
   const [hits,setHits]=useState([]);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
+  const [page,setPage]=useState(0);
+
+  useEffect(()=>{
+    let alive=true;
+    invoke("has_curseforge_key").then(value=>{if(alive)setKeySaved(Boolean(value));}).catch(()=>{if(alive)setKeySaved(false);});
+    return ()=>{alive=false;};
+  },[]);
+
   useEffect(()=>{
     const ctrl=new AbortController();
     const timer=setTimeout(async()=>{
+      if(provider==="curseforge"&&!keySaved){
+        setHits([]);
+        setBusy(false);
+        setError("Add your CurseForge API key below. NOVA will store it in Windows Credential Manager.");
+        return;
+      }
       setBusy(true); setError("");
       try {
         let results=[];
         if(provider==="modrinth") {
-          const p=new URLSearchParams({query:q,facets:JSON.stringify([[packs?"project_type:modpack":"project_type:mod"]]),limit:"24"});
+          const p=new URLSearchParams({query:q,facets:JSON.stringify([[packs?"project_type:modpack":"project_type:mod"]]),limit:"24",offset:String(page*24)});
           const r=await fetch("https://api.modrinth.com/v2/search?"+p,{signal:ctrl.signal});
           if(!r.ok) throw new Error("Modrinth catalog request failed");
           const data=await r.json();
           results=(data.hits||[]).map(x=>({id:x.project_id,title:x.title,description:x.description,downloads:x.downloads,image:x.icon_url,url:"https://modrinth.com/"+(packs?"modpack/":"mod/")+x.slug}));
         } else {
-          if(!apiKey.trim()) { setHits([]); setError("Enter your CurseForge API key to search its official catalog."); setBusy(false); return; }
-          const p=new URLSearchParams({gameId:"432",classId:packs?"4471":"6",pageSize:"24",sortField:"2",sortOrder:"desc"});
-          if(q.trim()) p.set("searchFilter",q.trim());
-          const r=await fetch("https://api.curseforge.com/v1/mods/search?"+p,{headers:{"x-api-key":apiKey.trim(),"Accept":"application/json"},signal:ctrl.signal});
-          if(r.status===403) throw new Error("CurseForge rejected this API key. Check that it is valid and approved for API access.");
-          if(r.status===401) throw new Error("CurseForge API key is missing or invalid.");
-          if(!r.ok) throw new Error("CurseForge catalog request failed ("+r.status+").");
-          const data=await r.json();
+          const data=await invoke("curseforge_search",{query:q,packs,index:page*24,gameVersion:null});
           results=(data.data||[]).map(x=>({id:String(x.id),title:x.name,description:x.summary||"No description provided.",downloads:x.downloadCount,image:x.logo?.thumbnailUrl,url:x.links?.websiteUrl||"https://www.curseforge.com/minecraft/"+(packs?"modpacks":"mc-mods")+"/"+x.slug}));
         }
-        setHits(results);
-      } catch(e) { if(e.name!=="AbortError") setError(e.message||"Unable to load catalog. Check your connection and retry."); }
+        if(!ctrl.signal.aborted) setHits(results);
+      } catch(e) { if(!ctrl.signal.aborted) setError(typeof e==="string"?e:(e.message||"Unable to load catalog. Check your connection and retry.")); }
       finally { if(!ctrl.signal.aborted) setBusy(false); }
     },250);
     return ()=>{clearTimeout(timer);ctrl.abort();};
-  },[q,packs,provider,apiKey]);
+  },[q,packs,provider,keySaved,page]);
+
+  const saveKey=async()=>{
+    if(!apiKey.trim())return;
+    setKeySaving(true);setError("");
+    try{
+      await invoke("save_curseforge_key",{apiKey:apiKey.trim()});
+      setApiKey("");setKeySaved(true);setPage(0);
+    }catch(e){setError(typeof e==="string"?e:(e.message||"Could not save the key to Windows Credential Manager."));}
+    finally{setKeySaving(false);}
+  };
+  const forgetKey=async()=>{
+    try{await invoke("delete_curseforge_key");setKeySaved(false);setHits([]);setError("CurseForge key removed from Windows Credential Manager.");}
+    catch(e){setError(typeof e==="string"?e:(e.message||"Could not remove the saved key."));}
+  };
+
   return <section className="catalog-page">
     <div className="eyebrow">{provider==="modrinth"?"MODRINTH":"CURSEFORGE"} CATALOG · LIVE SEARCH</div>
     <h2>{packs?"Discover modpacks":"Discover mods"}</h2>
-    <p>Search either catalog and open the project's page to review files and downloads.</p>
+    <p>Search the catalog and open a project's page to review its files and compatibility.</p>
     <div className="catalog-toolbar">
       <div className="catalog-provider" role="group" aria-label="Catalog provider">
-        <button className={provider==="modrinth"?"provider-choice selected":"provider-choice"} onClick={()=>setProvider("modrinth")}>Modrinth</button>
-        <button className={provider==="curseforge"?"provider-choice selected":"provider-choice"} onClick={()=>setProvider("curseforge")}>CurseForge</button>
+        <button className={provider==="modrinth"?"provider-choice selected":"provider-choice"} onClick={()=>{setProvider("modrinth");setPage(0);}}>Modrinth</button>
+        <button className={provider==="curseforge"?"provider-choice selected":"provider-choice"} onClick={()=>{setProvider("curseforge");setPage(0);}}>CurseForge</button>
       </div>
     </div>
     {provider==="curseforge"&&<div className="curseforge-key">
       <label htmlFor="curseforge-api-key">CURSEFORGE API KEY</label>
-      <input id="curseforge-api-key" type="password" autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} placeholder="Paste your CurseForge API key"/>
-      <span>Your key stays in this app session and is not saved to NOVA's repository.</span>
+      {keySaved
+        ? <div className="key-saved-row"><span><Check size={14}/> Saved securely in Windows Credential Manager</span><button className="delete-entry" onClick={forgetKey}>Forget key</button></div>
+        : <><input id="curseforge-api-key" type="password" autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveKey()} placeholder="Paste your CurseForge API key"/><button className="primary-btn key-save-button" onClick={saveKey} disabled={!apiKey.trim()||keySaving}>{keySaving?"Saving securely…":"Save key securely"}</button></>}
+      <span>The key is stored locally in Windows Credential Manager and is not written into NOVA's source code.</span>
     </div>}
-    <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>setQ(e.target.value)} placeholder={packs?"Search modpacks":"Search mods"}/></div>
+    <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks":"Search mods"}/></div>
     {busy&&<div className="catalog-note">Loading {provider==="modrinth"?"Modrinth":"CurseForge"} results…</div>}
     {error&&<div className="catalog-note error">{error}</div>}
     {!busy&&!error&&hits.length===0&&<div className="catalog-note">No matching projects found.</div>}
     <div className="catalog-grid">{hits.map(x=><article className="catalog-card" key={x.id}>{x.image?<img src={x.image} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<h3>{x.title}</h3><p>{x.description}</p><div className="catalog-meta"><span>{Number(x.downloads||0).toLocaleString()} downloads</span><a href={x.url} target="_blank" rel="noreferrer">View project ↗</a></div></article>)}</div>
+    <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>Previous</button><span>Page {page+1}</span><button className="secondary-btn" disabled={busy||hits.length===0} onClick={()=>setPage(p=>p+1)}>Next</button></div>
   </section>;
 }
 function LocalInstances() {
