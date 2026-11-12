@@ -17,3 +17,10 @@
 .curseforge-key input{height:34px;padding:0 10px;border:1px solid var(--line);border-radius:6px;background:#10121c;color:#f4f4fa;font:inherit;font-size:10px;outline:none}
 .curseforge-key input:focus{border-color:#9b83ff88}
 .curseforge-key span{font-size:8px;color:#888ba0}
+
+.key-saved-row{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.key-saved-row>span{display:flex;align-items:center;gap:7px;color:#83d8b3;font-size:10px}
+.key-save-button{align-self:flex-start;height:32px}
+.catalog-pagination{display:flex;align-items:center;justify-content:center;gap:14px;margin:18px 0 4px;color:#8f92a6;font-size:9px}
+.catalog-pagination .secondary-btn{height:30px}
+.catalog-pagination .secondary-btn:disabled{opacity:.4;cursor:default}
