@@ -214,7 +214,7 @@ function EmptyPage({ page, setPage }) {
     mods: { icon: Blocks, title: "Mod library", desc: "Find the performance, utility, and PvP mods you want in one place.", action: "Browse mod sources", note: "Modrinth and CurseForge integration is planned." },
     modpacks: { icon: Box, title: "Modpacks", desc: "Explore curated packs or bring your own pack into NOVA.", action: "Explore modpacks", note: "Pack browsing and installation are not connected yet." },
     pvp: { icon: Gamepad2, title: "PvP toolkit", desc: "A focused set of HUD and quality-of-life tools for competitive play.", action: "Explore modules", note: "No gameplay modules are enabled in this preview." },
-    settings: { icon: SlidersHorizontal, title: "Preferences", desc: "Tune the launcher experience and prepare your client setup.", action: "Back to overview", note: "Microsoft app ID configured (" + MICROSOFT_CLIENT_ID + "). Microsoft sign-in flow is still being implemented." }
+    settings: { icon: SlidersHorizontal, title: "Preferences", desc: "Tune the launcher experience and prepare your client setup.", action: "Back to overview", note: "Microsoft app ID configured (" + MICROSOFT_CLIENT_ID + "). Microsoft device-code sign-in is available from the Overview page." }
   }[page] || { icon: Compass, title: "NOVA", desc: "Your Minecraft, upgraded.", action: "Back to overview", note: "" };
   const Icon = content.icon;
   return <div className="empty-state"><div className="empty-icon"><Icon size={27}/></div><div className="eyebrow">NOVA WORKSPACE</div><h2>{content.title}</h2><p>{content.desc}</p><div className="empty-note"><span className="note-mark"><Activity size={15}/></span><span>{content.note}</span></div><button className="primary-btn" onClick={() => setPage("home")}>{content.action}<ArrowUpRight size={15}/></button></div>;
@@ -243,7 +243,7 @@ export default function App() {
     let offLink;
     let offComplete;
     (async () => {
-      offLink = await listen("nova-login-link", event => { if (alive) setLoginUrl(event.payload); });
+      offLink = await listen("nova-login-link", event => { if (alive) { setLoginUrl(event.payload); setMessage("Microsoft sign-in opened in your browser. Complete the sign-in there. If it did not open, use the link below."); } });
       offComplete = await listen("nova-login-complete", event => { if (alive) { setSignedIn(true); setAccountName(event.payload); setLoginUrl(""); setMessage("Microsoft account connected."); } });
       try {
         const name = await invoke("minecraft_account_name");
@@ -253,7 +253,7 @@ export default function App() {
     return () => { alive = false; offLink?.(); offComplete?.(); };
   }, []);
   const handleLogin = async () => {
-    setLoginBusy(true); setMessage("A Microsoft sign-in link will appear here. Complete sign-in in your browser.");
+    setLoginBusy(true); setLoginUrl(""); setMessage("Requesting a Microsoft sign-in session…");
     try { const name = await invoke("begin_microsoft_login"); setSignedIn(true); setAccountName(name); setLoginUrl(""); setMessage(`Signed in as ${name}.`); }
     catch (error) { setMessage(typeof error === "string" ? error : (error.message || "Microsoft sign-in failed.")); }
     finally { setLoginBusy(false); }
