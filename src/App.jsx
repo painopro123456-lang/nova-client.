@@ -17,7 +17,6 @@ const navGroups = [
   { label: "CLIENT", items: [{ id: "pvp", label: "PvP features", icon: Gamepad2 }, { id: "settings", label: "Settings", icon: Settings }] }
 ];
 
-const versions = ["1.21.4", "1.21.1", "1.20.4", "1.8.9"];
 
 function Sidebar({ page, setPage }) {
   return <aside className="sidebar">
@@ -44,16 +43,16 @@ function Topbar({ title, subtitle }) {
   </header>;
 }
 
-function Home({ onNavigate, selectedVersion, setSelectedVersion, launching, onLaunch, onLogin, signedIn, accountName, loginBusy, loginUrl, message }) {
+function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versionsLoading, loaderType, setLoaderType, launching, onLaunch, onLogin, signedIn, accountName, loginBusy, loginUrl, message }) {
   return <>
     <div className="hero-panel">
       <div className="hero-glow"/>
-      <div className="hero-content"><div className="hero-kicker"><span className="kicker-icon"><Sparkles size={13}/></span> YOUR NEXT SESSION STARTS HERE</div><h2>Make every<br/><em>frame count.</em></h2><p>A cleaner way to launch Minecraft. Your worlds, your settings, your pace.</p><div className="hero-actions"><button className="primary-btn" onClick={onLaunch} disabled={launching || !signedIn}><Play size={16} fill="currentColor"/>{launching ? "Preparing Minecraft…" : "Play Minecraft"}<ArrowUpRight size={15}/></button><button className="secondary-btn" onClick={onLogin} disabled={loginBusy || signedIn}>{signedIn ? `Signed in${accountName ? ` · ${accountName}` : ""}` : loginBusy ? "Waiting for Microsoft…" : "Sign in with Microsoft"}</button><button className="secondary-btn" onClick={() => onNavigate("instances")}>Manage instances</button></div><div className="hero-foot"><span><ShieldCheck size={14}/> Microsoft account stored securely on this PC</span><span><Gauge size={14}/> Vanilla Java Edition</span></div>{loginUrl && !signedIn && <a className="text-button" href={loginUrl} target="_blank" rel="noreferrer">Continue Microsoft sign-in ↗</a>}{message && <p className="launch-message" role="status">{message}</p>}</div>
+      <div className="hero-content"><div className="hero-kicker"><span className="kicker-icon"><Sparkles size={13}/></span> YOUR NEXT SESSION STARTS HERE</div><h2>Make every<br/><em>frame count.</em></h2><p>A cleaner way to launch Minecraft. Your worlds, your settings, your pace.</p><div className="hero-actions"><button className="primary-btn" onClick={onLaunch} disabled={launching || !signedIn}><Play size={16} fill="currentColor"/>{launching ? "Preparing Minecraft…" : "Play Minecraft"}<ArrowUpRight size={15}/></button><button className="secondary-btn" onClick={onLogin} disabled={loginBusy || signedIn}>{signedIn ? `Signed in${accountName ? ` · ${accountName}` : ""}` : loginBusy ? "Waiting for Microsoft…" : "Sign in with Microsoft"}</button><button className="secondary-btn" onClick={() => onNavigate("instances")}>Manage instances</button></div><div className="hero-foot"><span><ShieldCheck size={14}/> Microsoft account stored securely on this PC</span><span><Gauge size={14}/> {loaderType === "fabric" ? "Fabric modded" : "Vanilla Java Edition"}</span></div>{loginUrl && !signedIn && <a className="text-button" href={loginUrl} target="_blank" rel="noreferrer">Continue Microsoft sign-in ↗</a>}{message && <p className="launch-message" role="status">{message}</p>}</div>
       <div className="orbit-art" aria-hidden="true"><div className="orbit-ring ring-one"/><div className="orbit-ring ring-two"/><div className="orbit-core"><Sparkles size={48}/></div><div className="orbit-chip chip-one"><Cpu size={15}/> PERFORMANCE</div><div className="orbit-chip chip-two"><Gamepad2 size={15}/> BUILT FOR PLAY</div></div>
       <div className="hero-index">01 <span>/ 04</span></div>
     </div>
     <div className="section-heading"><div><div className="eyebrow">READY WHEN YOU ARE</div><h2>Quick launch</h2></div><button className="text-button" onClick={() => onNavigate("instances")}>All instances <ArrowUpRight size={14}/></button></div>
-    <div className="quick-card"><div className="minecraft-icon"><Box size={22}/></div><div className="quick-info"><b>Vanilla Minecraft</b><span>Clean profile · No extra mods</span></div><div className="version-select"><label>GAME VERSION</label><select value={selectedVersion} onChange={e => setSelectedVersion(e.target.value)}>{versions.map(v => <option key={v}>{v}</option>)}</select></div><button className="small-play" onClick={onLaunch} disabled={launching || !signedIn}><Play size={15} fill="currentColor"/> Launch</button></div>
+    <div className="quick-card"><div className="minecraft-icon"><Box size={22}/></div><div className="quick-info"><b>Vanilla Minecraft</b><span>Clean profile · No extra mods</span></div><div className="version-select"><label>GAME VERSION</label><select value={selectedVersion} onChange={e => setSelectedVersion(e.target.value)} disabled={versionsLoading || versions.length === 0}><option value="" disabled>{versionsLoading ? "Loading versions…" : "Choose a version"}</option>{versions.map(v => <option key={v.id} value={v.id}>{v.id}{v.type === "snapshot" ? " · Snapshot" : ""}</option>)}</select></div><div className="version-select"><label>MOD LOADER</label><select value={loaderType} onChange={e => setLoaderType(e.target.value)}><option value="vanilla">Vanilla</option><option value="fabric">Fabric</option></select></div><button className="small-play" onClick={onLaunch} disabled={launching || !signedIn}><Play size={15} fill="currentColor"/> Launch</button></div>
     <div className="feature-grid"><div className="feature-card"><div className="feature-icon purple"><Gauge size={18}/></div><b>Performance first</b><p>A native Rust shell is the foundation. No performance claims until benchmarks exist.</p><span className="feature-status">IN DEVELOPMENT</span></div><div className="feature-card"><div className="feature-icon blue"><Blocks size={18}/></div><b>Your mod library</b><p>Planned browsing and installs through trusted mod platforms.</p><span className="feature-status">PLANNED</span></div><div className="feature-card"><div className="feature-icon green"><ShieldCheck size={18}/></div><b>Profiles that stay yours</b><p>Keep game versions and configurations organized by instance.</p><span className="feature-status">PLANNED</span></div></div>
   </>;
 }
@@ -159,13 +158,14 @@ function Catalog({ packs }) {
     <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||hits.length===0} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
   </section>;
 }
-function LocalInstances() {
+function LocalInstances({ versions }) {
   const [items,setItems]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.instances")||"[]")}catch{return[]}});
   const [name,setName]=useState("");
-  const [version,setVersion]=useState("1.21.4");
+  const [version,setVersion]=useState("");
+  useEffect(()=>{if(!version && versions.length) setVersion(versions.find(v=>v.type==="release")?.id || versions[0].id);},[versions,version]);
   useEffect(()=>{localStorage.setItem("nova.instances",JSON.stringify(items))},[items]);
   const add=()=>{if(!name.trim())return;setItems(a=>[...a,{id:Date.now(),name:name.trim(),version}]);setName("")};
-  return <section className="local-instances"><div className="eyebrow">LOCAL PROFILES</div><h2>Your instances</h2><p>Create local profiles to organize your Minecraft setups. Game installation and launching are still in development.</p><div className="instance-create"><input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Instance name"/><select value={version} onChange={e=>setVersion(e.target.value)}>{versions.map(v=><option key={v}>{v}</option>)}</select><button className="primary-btn" onClick={add} disabled={!name.trim()}><Plus size={14}/> Create</button></div>{items.length===0?<div className="catalog-note">No profiles yet. Create your first instance above.</div>:items.map(x=><div className="instance-entry" key={x.id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{x.name}</b><span>Minecraft Java · {x.version}</span></div><button className="delete-entry" onClick={()=>setItems(a=>a.filter(y=>y.id!==x.id))}>Delete</button></div>)}</section>;
+  return <section className="local-instances"><div className="eyebrow">LOCAL PROFILES</div><h2>Your instances</h2><p>Create local profiles to organize your Minecraft setups. Game installation and launching are still in development.</p><div className="instance-create"><input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Instance name"/><select value={version} onChange={e=>setVersion(e.target.value)} disabled={!version || versions.length===0}>{versions.map(v=><option key={v.id} value={v.id}>{v.id}{v.type==="snapshot"?" · Snapshot":""}</option>)}</select><button className="primary-btn" onClick={add} disabled={!name.trim()}><Plus size={14}/> Create</button></div>{items.length===0?<div className="catalog-note">No profiles yet. Create your first instance above.</div>:items.map(x=><div className="instance-entry" key={x.id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{x.name}</b><span>Minecraft Java · {x.version}</span></div><button className="delete-entry" onClick={()=>setItems(a=>a.filter(y=>y.id!==x.id))}>Delete</button></div>)}</section>;
 }
 
 function EmptyPage({ page, setPage }) {
@@ -182,7 +182,10 @@ function EmptyPage({ page, setPage }) {
 
 export default function App() {
   const [page, setPage] = useState("home");
-  const [selectedVersion, setSelectedVersion] = useState("1.21.4");
+  const [selectedVersion, setSelectedVersion] = useState("");
+  const [versions, setVersions] = useState([]);
+  const [versionsLoading, setVersionsLoading] = useState(true);
+  const [loaderType, setLoaderType] = useState("vanilla");
   const [launching, setLaunching] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [accountName, setAccountName] = useState("");
@@ -191,6 +194,12 @@ export default function App() {
   const [message, setMessage] = useState("");
   useEffect(() => {
     let alive = true;
+    invoke("minecraft_versions").then(manifest => {
+      const entries = Array.isArray(manifest?.versions) ? manifest.versions.filter(v => typeof v.id === "string" && v.id.trim()).map(v => ({id:v.id,type:v.type || "release"})) : [];
+      if (!entries.length) throw new Error("Minecraft returned an empty version list.");
+      if (alive) { setVersions(entries); setSelectedVersion(manifest.latest?.release && entries.some(v=>v.id===manifest.latest.release) ? manifest.latest.release : entries[0].id); }
+    }).catch(error => { if (alive) setMessage(typeof error === "string" ? error : (error.message || "Could not load Minecraft versions.")); })
+      .finally(() => { if (alive) setVersionsLoading(false); });
     let offLink;
     let offComplete;
     (async () => {
@@ -211,12 +220,14 @@ export default function App() {
   };
   const handleLaunch = async () => {
     if (!signedIn) { setMessage("Sign in with Microsoft before launching Minecraft."); return; }
-    setLaunching(true); setMessage("Preparing Minecraft. The first launch downloads game files and Java runtime.");
-    try { await invoke("launch_minecraft", { version: selectedVersion }); setMessage("Minecraft has been started. Keep NOVA open while the game loads."); }
+    if (typeof selectedVersion !== "string" || !selectedVersion.trim() || selectedVersion === "null" || selectedVersion === "undefined") { setMessage("No Minecraft version is selected. Wait for the version list, then choose a version."); return; }
+    if (versionsLoading) { setMessage("Minecraft versions are still loading. Try again in a moment."); return; }
+    setLaunching(true); setMessage(`Preparing Minecraft ${selectedVersion} (${loaderType}). The first launch downloads game files and Java runtime.`);
+    try { await invoke("launch_minecraft", { version: selectedVersion, loader: loaderType }); setMessage("Minecraft has been started. Keep NOVA open while the game loads."); }
     catch (error) { setMessage(typeof error === "string" ? error : (error.message || "Minecraft could not be started.")); }
     finally { setLaunching(false); }
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances versions={versions}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
