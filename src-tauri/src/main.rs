@@ -12,7 +12,6 @@ use zip::ZipArchive;
 use tauri::Emitter;
 
 const KEYRING_SERVICE: &str = "NOVA Client";
-const KEYRING_USER: &str = "curseforge-api-key";
 const MINECRAFT_ACCOUNT_USER: &str = "minecraft-account";
 const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
 
@@ -21,34 +20,13 @@ fn credential_entry(user: &str) -> Result<Entry, String> {
         .map_err(|e| format!("Windows Credential Manager is unavailable: {e}"))
 }
 
-#[tauri::command]
-fn has_curseforge_key() -> bool {
-    credential_entry(KEYRING_USER)
-        .and_then(|entry| entry.get_password().map_err(|e| e.to_string()))
-        .is_ok()
-}
-
-#[tauri::command]
-fn save_curseforge_key(api_key: String) -> Result<(), String> {
-    let key = api_key.trim();
-    if key.is_empty() {
-        return Err("Enter a CurseForge API key first.".into());
-    }
-    if key.len() > 512 || key.chars().any(char::is_control) {
-        return Err("The API key format is invalid.".into());
-    }
-    credential_entry(KEYRING_USER)?
-        .set_password(key)
-        .map_err(|e| format!("Could not save the key to Windows Credential Manager: {e}"))
-}
-
-#[tauri::command]
-fn delete_curseforge_key() -> Result<(), String> {
-    match credential_entry(KEYRING_USER)?.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("Could not remove the saved key: {e}")),
-    }
+// The approved NOVA key is injected by GitHub Actions at compile time.
+// This embeds it in the private NOVA build; do not distribute that binary publicly.
+fn curseforge_api_key() -> Result<String, String> {
+    option_env!("CURSEFORGE_API_KEY")
+        .filter(|key| !key.trim().is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| "This NOVA build was created without its CurseForge API credential. Rebuild with the CURSEFORGE_API_KEY GitHub Actions secret.".to_string())
 }
 
 #[tauri::command]
@@ -58,9 +36,7 @@ async fn curseforge_search(
     index: u32,
     game_version: Option<String>,
 ) -> Result<Value, String> {
-    let api_key = credential_entry(KEYRING_USER)?
-        .get_password()
-        .map_err(|_| "Save your CurseForge API key in the catalog first.".to_string())?;
+    let api_key = curseforge_api_key()?;
 
     let mut headers = HeaderMap::new();
     headers.insert(
@@ -415,8 +391,7 @@ async fn install_modrinth_modpack(project_id: String, instance_name: String, ver
 
 #[tauri::command]
 async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
-    let api_key = credential_entry(KEYRING_USER)?.get_password()
-        .map_err(|_| "Save your approved CurseForge API key in NOVA first.".to_string())?;
+    let api_key = curseforge_api_key()?;
     let mut headers = HeaderMap::new();
     headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
@@ -432,8 +407,7 @@ async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
 #[tauri::command]
 async fn install_curseforge_modpack(mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
-    let api_key = credential_entry(KEYRING_USER)?.get_password()
-        .map_err(|_| "Save your approved CurseForge API key in NOVA before installing a CurseForge pack.".to_string())?;
+    let api_key = curseforge_api_key()?;
     let client = reqwest::Client::new();
     let mut headers = HeaderMap::new();
     headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
@@ -508,9 +482,6 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
-            has_curseforge_key,
-            save_curseforge_key,
-            delete_curseforge_key,
             curseforge_search,
             begin_microsoft_login,
             minecraft_account_name,
