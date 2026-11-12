@@ -21,7 +21,7 @@ jobs:
     steps:
       - name: Clone source to a Windows-safe path
         shell: pwsh
-        working-directory: D:\\a
+        working-directory: D:/a
         run: git clone --depth 1 https://github.com/painopro123456-lang/nova-client..git nova-src
 
       - name: Set up Node.js
@@ -35,17 +35,17 @@ jobs:
           targets: x86_64-pc-windows-msvc
 
       - name: Install dependencies
-        working-directory: D:\\a\\nova-src
+        working-directory: D:/a/nova-src
         run: npm install
 
       - name: Build NOVA Windows installer
-        working-directory: D:\\a\\nova-src
+        working-directory: D:/a/nova-src
         run: npm run tauri -- build
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: NOVA-Client-Windows-Installer
-          path: D:\\a\\nova-src\\src-tauri\\target\\release\\bundle\\nsis\\*.exe
+          path: D:/a/nova-src\\src-tauri\\target\\release\\bundle\\nsis\\*.exe
           if-no-files-found: error
           retention-days: 14
