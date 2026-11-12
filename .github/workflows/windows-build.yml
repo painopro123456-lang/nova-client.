@@ -49,16 +49,24 @@ jobs:
           $bitmap = New-Object System.Drawing.Bitmap 256, 256
           $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
           $graphics.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
-          $graphics.Clear([System.Drawing.Color]::FromArgb(12, 15, 34))
-          $rect = New-Object System.Drawing.Rectangle 12, 12, 232, 232
-          $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rect, [System.Drawing.Color]::FromArgb(125, 82, 255), [System.Drawing.Color]::FromArgb(35, 205, 230), 45)
+          $graphics.Clear([System.Drawing.Color]::FromArgb(10, 13, 29))
+          $rect = New-Object System.Drawing.Rectangle 18, 18, 220, 220
+          $brush = New-Object System.Drawing.Drawing2D.LinearGradientBrush($rect, [System.Drawing.Color]::FromArgb(151, 125, 255), [System.Drawing.Color]::FromArgb(65, 205, 235), 45)
           $graphics.FillEllipse($brush, $rect)
-          $font = New-Object System.Drawing.Font("Segoe UI", 104, [System.Drawing.FontStyle]::Bold, [System.Drawing.GraphicsUnit]::Pixel)
-          $textBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-          $format = New-Object System.Drawing.StringFormat
-          $format.Alignment = [System.Drawing.StringAlignment]::Center
-          $format.LineAlignment = [System.Drawing.StringAlignment]::Center
-          $graphics.DrawString("N", $font, $textBrush, (New-Object System.Drawing.RectangleF 12, 10, 232, 232), $format)
+          $cut = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::FromArgb(10, 13, 29))
+          $graphics.FillEllipse($cut, 82, 24, 154, 154)
+          $points = [System.Drawing.Point[]]@(
+            (New-Object System.Drawing.Point 176, 42),
+            (New-Object System.Drawing.Point 187, 72),
+            (New-Object System.Drawing.Point 217, 83),
+            (New-Object System.Drawing.Point 187, 94),
+            (New-Object System.Drawing.Point 176, 124),
+            (New-Object System.Drawing.Point 165, 94),
+            (New-Object System.Drawing.Point 135, 83),
+            (New-Object System.Drawing.Point 165, 72)
+          )
+          $star = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
+          $graphics.FillPolygon($star, $points)
           $handle = $bitmap.GetHicon()
           $icon = [System.Drawing.Icon]::FromHandle($handle)
           $stream = [System.IO.File]::Create((Join-Path $iconDir "icon.ico"))
@@ -69,6 +77,8 @@ jobs:
           $bitmap.Dispose()
           $font.Dispose()
           $brush.Dispose()
+          $cut.Dispose()
+          $star.Dispose()
           $textBrush.Dispose()
           $format.Dispose()
 
