@@ -2,6 +2,7 @@ import { MICROSOFT_CLIENT_ID } from "./config";
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import {
   Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box, Check,
   ChevronDown, CircleHelp, Compass, Cpu, Gamepad2, Gauge, HardDrive,
@@ -43,16 +44,16 @@ function Topbar({ title, subtitle }) {
   </header>;
 }
 
-function Home({ onNavigate, selectedVersion, setSelectedVersion, launching, setLaunching }) {
+function Home({ onNavigate, selectedVersion, setSelectedVersion, launching, onLaunch, onLogin, signedIn, accountName, loginBusy, loginUrl, message }) {
   return <>
     <div className="hero-panel">
       <div className="hero-glow"/>
-      <div className="hero-content"><div className="hero-kicker"><span className="kicker-icon"><Sparkles size={13}/></span> YOUR NEXT SESSION STARTS HERE</div><h2>Make every<br/><em>frame count.</em></h2><p>A cleaner way to launch Minecraft. Your worlds, your settings, your pace.</p><div className="hero-actions"><button className="primary-btn" onClick={() => setLaunching(true)} disabled={launching}><Play size={16} fill="currentColor"/>{launching ? "Launch integration coming soon" : "Play Minecraft"}<ArrowUpRight size={15}/></button><button className="secondary-btn" onClick={() => onNavigate("instances")}>Manage instances</button></div><div className="hero-foot"><span><ShieldCheck size={14}/> Local profile preview</span><span><Gauge size={14}/> Lightweight native shell planned</span></div></div>
+      <div className="hero-content"><div className="hero-kicker"><span className="kicker-icon"><Sparkles size={13}/></span> YOUR NEXT SESSION STARTS HERE</div><h2>Make every<br/><em>frame count.</em></h2><p>A cleaner way to launch Minecraft. Your worlds, your settings, your pace.</p><div className="hero-actions"><button className="primary-btn" onClick={onLaunch} disabled={launching || !signedIn}><Play size={16} fill="currentColor"/>{launching ? "Preparing Minecraft…" : "Play Minecraft"}<ArrowUpRight size={15}/></button><button className="secondary-btn" onClick={onLogin} disabled={loginBusy || signedIn}>{signedIn ? `Signed in${accountName ? ` · ${accountName}` : ""}` : loginBusy ? "Waiting for Microsoft…" : "Sign in with Microsoft"}</button><button className="secondary-btn" onClick={() => onNavigate("instances")}>Manage instances</button></div><div className="hero-foot"><span><ShieldCheck size={14}/> Microsoft account stored securely on this PC</span><span><Gauge size={14}/> Vanilla Java Edition</span></div>{loginUrl && !signedIn && <a className="text-button" href={loginUrl} target="_blank" rel="noreferrer">Continue Microsoft sign-in ↗</a>}{message && <p className="launch-message" role="status">{message}</p>}</div>
       <div className="orbit-art" aria-hidden="true"><div className="orbit-ring ring-one"/><div className="orbit-ring ring-two"/><div className="orbit-core"><Sparkles size={48}/></div><div className="orbit-chip chip-one"><Cpu size={15}/> PERFORMANCE</div><div className="orbit-chip chip-two"><Gamepad2 size={15}/> BUILT FOR PLAY</div></div>
       <div className="hero-index">01 <span>/ 04</span></div>
     </div>
     <div className="section-heading"><div><div className="eyebrow">READY WHEN YOU ARE</div><h2>Quick launch</h2></div><button className="text-button" onClick={() => onNavigate("instances")}>All instances <ArrowUpRight size={14}/></button></div>
-    <div className="quick-card"><div className="minecraft-icon"><Box size={22}/></div><div className="quick-info"><b>Vanilla Minecraft</b><span>Clean profile · No extra mods</span></div><div className="version-select"><label>GAME VERSION</label><select value={selectedVersion} onChange={e => setSelectedVersion(e.target.value)}>{versions.map(v => <option key={v}>{v}</option>)}</select></div><button className="small-play" onClick={() => setLaunching(true)} disabled={launching}><Play size={15} fill="currentColor"/> Launch</button></div>
+    <div className="quick-card"><div className="minecraft-icon"><Box size={22}/></div><div className="quick-info"><b>Vanilla Minecraft</b><span>Clean profile · No extra mods</span></div><div className="version-select"><label>GAME VERSION</label><select value={selectedVersion} onChange={e => setSelectedVersion(e.target.value)}>{versions.map(v => <option key={v}>{v}</option>)}</select></div><button className="small-play" onClick={onLaunch} disabled={launching || !signedIn}><Play size={15} fill="currentColor"/> Launch</button></div>
     <div className="feature-grid"><div className="feature-card"><div className="feature-icon purple"><Gauge size={18}/></div><b>Performance first</b><p>A native Rust shell is the foundation. No performance claims until benchmarks exist.</p><span className="feature-status">IN DEVELOPMENT</span></div><div className="feature-card"><div className="feature-icon blue"><Blocks size={18}/></div><b>Your mod library</b><p>Planned browsing and installs through trusted mod platforms.</p><span className="feature-status">PLANNED</span></div><div className="feature-card"><div className="feature-icon green"><ShieldCheck size={18}/></div><b>Profiles that stay yours</b><p>Keep game versions and configurations organized by instance.</p><span className="feature-status">PLANNED</span></div></div>
   </>;
 }
@@ -183,7 +184,39 @@ export default function App() {
   const [page, setPage] = useState("home");
   const [selectedVersion, setSelectedVersion] = useState("1.21.4");
   const [launching, setLaunching] = useState(false);
+  const [signedIn, setSignedIn] = useState(false);
+  const [accountName, setAccountName] = useState("");
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginUrl, setLoginUrl] = useState("");
+  const [message, setMessage] = useState("");
+  useEffect(() => {
+    let alive = true;
+    let offLink;
+    let offComplete;
+    (async () => {
+      offLink = await listen("nova-login-link", event => { if (alive) setLoginUrl(event.payload); });
+      offComplete = await listen("nova-login-complete", event => { if (alive) { setSignedIn(true); setAccountName(event.payload); setLoginUrl(""); setMessage("Microsoft account connected."); } });
+      try {
+        const name = await invoke("minecraft_account_name");
+        if (alive && name) { setSignedIn(true); setAccountName(name); }
+      } catch (error) { if (alive) setMessage(String(error)); }
+    })();
+    return () => { alive = false; offLink?.(); offComplete?.(); };
+  }, []);
+  const handleLogin = async () => {
+    setLoginBusy(true); setMessage("A Microsoft sign-in link will appear here. Complete sign-in in your browser.");
+    try { const name = await invoke("begin_microsoft_login"); setSignedIn(true); setAccountName(name); setLoginUrl(""); setMessage(`Signed in as ${name}.`); }
+    catch (error) { setMessage(typeof error === "string" ? error : (error.message || "Microsoft sign-in failed.")); }
+    finally { setLoginBusy(false); }
+  };
+  const handleLaunch = async () => {
+    if (!signedIn) { setMessage("Sign in with Microsoft before launching Minecraft."); return; }
+    setLaunching(true); setMessage("Preparing Minecraft. The first launch downloads game files and Java runtime.");
+    try { await invoke("launch_minecraft", { version: selectedVersion }); setMessage("Minecraft has been started. Keep NOVA open while the game loads."); }
+    catch (error) { setMessage(typeof error === "string" ? error : (error.message || "Minecraft could not be started.")); }
+    finally { setLaunching(false); }
+  };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} launching={launching} setLaunching={setLaunching}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
