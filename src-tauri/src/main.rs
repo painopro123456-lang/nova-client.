@@ -482,12 +482,13 @@ fn create_instance(instance_name: String, display_name: String, version: String,
     }
     let folder = instance_folder(&name)?;
     std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    let loader_version = if loader == "vanilla" { String::new() } else { "latest".to_owned() };
     let metadata = json!({
         "instanceName": name,
         "name": display_name.trim(),
         "minecraftVersion": version,
         "loader": loader,
-        "loaderVersion": if loader == "vanilla" { String::new() } else { "latest".to_owned() },
+        "loaderVersion": loader_version,
         "source": "custom"
     });
     save_instance_metadata(&folder, metadata)
