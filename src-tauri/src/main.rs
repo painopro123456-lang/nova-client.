@@ -359,15 +359,15 @@ fn save_instance_metadata(folder: &Path, metadata: Value) -> Result<Value, Strin
 }
 
 #[tauri::command]
-async fn install_modrinth_modpack(project_id: String, instance_name: String) -> Result<Value, String> {
+async fn install_modrinth_modpack(project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let client = reqwest::Client::new();
     let versions: Value = client.get(format!("https://api.modrinth.com/v2/project/{project_id}/version"))
         .send().await.map_err(|e| format!("Could not reach Modrinth: {e}"))?
         .error_for_status().map_err(|e| format!("Modrinth returned an error: {e}"))?
         .json().await.map_err(|e| format!("Modrinth returned an unreadable version list: {e}"))?;
-    let latest = versions.as_array().and_then(|a| a.first())
-        .ok_or_else(|| "Modrinth has no downloadable versions for this modpack.".to_string())?;
+    let version_list = versions.as_array().ok_or("Modrinth returned an invalid version list.")?;
+    let latest = if let Some(requested) = version_id.as_deref() { version_list.iter().find(|v| v["id"].as_str() == Some(requested)).ok_or("The selected Modrinth modpack version is no longer available.")? } else { version_list.first().ok_or_else(|| "Modrinth has no downloadable versions for this modpack.".to_string())? };
     let version_id = latest["id"].as_str().ok_or("Modrinth version ID is missing.")?;
     let file = latest["files"].as_array().and_then(|a| a.iter().find(|f| f["primary"].as_bool() == Some(true)).or_else(|| a.first()))
         .ok_or("Modrinth did not provide a modpack archive.")?;
@@ -412,8 +412,25 @@ async fn install_modrinth_modpack(project_id: String, instance_name: String) -> 
     }))
 }
 
+
 #[tauri::command]
-async fn install_curseforge_modpack(mod_id: String, instance_name: String) -> Result<Value, String> {
+async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
+    let api_key = credential_entry(KEYRING_USER)?.get_password()
+        .map_err(|_| "Save your approved CurseForge API key in NOVA first.".to_string())?;
+    let mut headers = HeaderMap::new();
+    headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    let response = reqwest::Client::new()
+        .get(format!("{CURSEFORGE_API}/mods/{mod_id}/files"))
+        .headers(headers).query(&[("pageSize","50"),("index","0")])
+        .send().await.map_err(|e| format!("Could not reach CurseForge: {e}"))?
+        .error_for_status().map_err(|e| format!("CurseForge could not list modpack versions: {e}"))?
+        .json::<Value>().await.map_err(|e| format!("CurseForge returned an unreadable version list: {e}"))?;
+    Ok(response["data"].as_array().cloned().unwrap_or_default().into())
+}
+
+#[tauri::command]
+async fn install_curseforge_modpack(mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let api_key = credential_entry(KEYRING_USER)?.get_password()
         .map_err(|_| "Save your approved CurseForge API key in NOVA before installing a CurseForge pack.".to_string())?;
@@ -426,8 +443,8 @@ async fn install_curseforge_modpack(mod_id: String, instance_name: String) -> Re
         .send().await.map_err(|e| format!("Could not reach CurseForge: {e}"))?
         .error_for_status().map_err(|e| format!("CurseForge could not list pack files: {e}"))?
         .json().await.map_err(|e| format!("CurseForge returned an unreadable file list: {e}"))?;
-    let latest = files["data"].as_array().and_then(|a| a.first())
-        .ok_or("CurseForge has no downloadable files for this modpack.")?;
+    let file_list = files["data"].as_array().ok_or("CurseForge returned an invalid file list.")?;
+    let latest = if let Some(requested) = file_id { file_list.iter().find(|f| f["id"].as_u64() == Some(requested)).ok_or("The selected CurseForge modpack version is no longer available.")? } else { file_list.first().ok_or("CurseForge has no downloadable files for this modpack.")? };
     let file_id = latest["id"].as_u64().ok_or("CurseForge file ID is missing.")?;
     let manifest_url: String = client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}/download-url"))
         .headers(headers.clone()).send().await.map_err(|e| format!("Could not request the CurseForge pack download: {e}"))?
@@ -501,6 +518,7 @@ fn main() {
             minecraft_versions,
             launch_minecraft,
             install_modrinth_modpack,
+            curseforge_modpack_versions,
             install_curseforge_modpack,
             delete_instance
         ])
