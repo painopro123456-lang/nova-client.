@@ -111,3 +111,17 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 
 
 .pack-install-row{display:flex;justify-content:flex-start;margin-top:14px}.pack-install-row .primary-btn{min-height:38px;padding:0 14px;font-size:12px}.catalog-note{overflow-wrap:anywhere}
+
+/* Mod and modpack project artwork */
+.project-card-top img{width:52px;height:52px;display:block;flex:none;object-fit:cover;border-radius:13px;border:1px solid #ffffff18;background:#1b2030;box-shadow:0 5px 15px #0004}
+.project-card-top .catalog-placeholder{width:52px;height:52px;display:grid;place-items:center;border-radius:13px;background:linear-gradient(145deg,#292342,#172c3b);color:#c8b9ff;border:1px solid #ffffff18}
+.pack-version-backdrop{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:22px;background:#050710c9;backdrop-filter:blur(9px)}
+.pack-version-dialog{width:min(480px,100%);padding:25px;border:1px solid #a58aff45;border-radius:16px;background:linear-gradient(145deg,#191b2a,#101521);box-shadow:0 25px 90px #0009}
+.pack-version-dialog h3{font-size:21px;letter-spacing:-.6px;margin:9px 0 5px;color:#f5f2ff}
+.pack-version-dialog>p{font-size:11px;line-height:1.6;color:#a1a5b9;margin:0 0 20px}
+.pack-version-label{display:block;margin-bottom:8px;font-size:8px;letter-spacing:1.1px;color:#b8a9ef;font-weight:700}
+.pack-version-select{width:100%;min-height:44px;padding:0 12px;border:1px solid #ffffff20;border-radius:8px;background:#101421;color:#f2efff;font:inherit;font-size:11px}
+.pack-version-meta{margin-top:9px;font-size:9px;color:#8389a0}
+.pack-version-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:23px}
+.pack-version-dialog .primary-btn{min-height:38px;padding:0 13px;font-size:10px}
+.catalog-state.compact{min-height:90px}
