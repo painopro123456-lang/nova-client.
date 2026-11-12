@@ -144,7 +144,20 @@ fn sign_out_minecraft() -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn launch_minecraft(version: String) -> Result<(), String> {
+async fn minecraft_versions() -> Result<Value, String> {
+    let response = reqwest::Client::new()
+        .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+        .send()
+        .await
+        .map_err(|e| format!("Could not fetch Minecraft version list: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Minecraft version service returned an error: {e}"))?;
+    response.json::<Value>().await
+        .map_err(|e| format!("Minecraft version list was unreadable: {e}"))
+}
+
+#[tauri::command]
+async fn launch_minecraft(version: String, loader: Option<String>) -> Result<(), String> {
     let version = version.trim();
     if version.is_empty() || version.eq_ignore_ascii_case("null") || version.eq_ignore_ascii_case("undefined") {
         return Err("No Minecraft version was selected. Choose a version and try again.".into());
@@ -222,6 +235,7 @@ fn main() {
             begin_microsoft_login,
             minecraft_account_name,
             sign_out_minecraft,
+            minecraft_versions,
             launch_minecraft
         ])
         .run(tauri::generate_context!())
