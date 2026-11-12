@@ -119,28 +119,43 @@ function Catalog({ packs }) {
   };
 
   return <section className="catalog-page">
-    <div className="eyebrow">{provider==="modrinth"?"MODRINTH":"CURSEFORGE"} CATALOG · LIVE SEARCH</div>
-    <h2>{packs?"Discover modpacks":"Discover mods"}</h2>
-    <p>Search the catalog and open a project's page to review its files and compatibility.</p>
-    <div className="catalog-toolbar">
+    <div className="catalog-hero">
+      <div className="catalog-hero-copy">
+        <div className="eyebrow"><span className="live-indicator"/> NOVA DISCOVERY / {packs?"MODPACKS":"MODS"}</div>
+        <h2>{packs?"A whole new world.":"Make Minecraft yours."}</h2>
+        <p>{packs?"Find complete experiences built by the community.":"Discover the tools, visuals and quality-of-life upgrades you want."}</p>
+        <div className="catalog-hero-meta"><span><Sparkles size={13}/> Community-powered</span><span><ShieldCheck size={13}/> Source-linked projects</span></div>
+      </div>
+      <div className="catalog-hero-art" aria-hidden="true"><div className="catalog-art-orbit orbit-a"/><div className="catalog-art-orbit orbit-b"/><div className="catalog-art-cube"><Blocks size={43}/></div><div className="catalog-art-star"><Sparkles size={18}/></div></div>
+    </div>
+    <div className="catalog-section-head">
+      <div><div className="eyebrow">THE LIBRARY</div><h3>Explore {packs?"modpacks":"mods"}</h3><p>Search across trusted community platforms.</p></div>
       <div className="catalog-provider" role="group" aria-label="Catalog provider">
         <button className={provider==="modrinth"?"provider-choice selected":"provider-choice"} onClick={()=>{setProvider("modrinth");setPage(0);}}>Modrinth</button>
         <button className={provider==="curseforge"?"provider-choice selected":"provider-choice"} onClick={()=>{setProvider("curseforge");setPage(0);}}>CurseForge</button>
       </div>
     </div>
     {provider==="curseforge"&&<div className="curseforge-key">
-      <label htmlFor="curseforge-api-key">CURSEFORGE API KEY</label>
+      <div className="key-heading"><div className="key-lock"><ShieldCheck size={16}/></div><div><b>CurseForge connection</b><span>Connect your approved API key to search the catalog.</span></div></div>
       {keySaved
-        ? <div className="key-saved-row"><span><Check size={14}/> Saved securely in Windows Credential Manager</span><button className="delete-entry" onClick={forgetKey}>Forget key</button></div>
-        : <><input id="curseforge-api-key" type="password" autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveKey()} placeholder="Paste your CurseForge API key"/><button className="primary-btn key-save-button" onClick={saveKey} disabled={!apiKey.trim()||keySaving}>{keySaving?"Saving securely…":"Save key securely"}</button></>}
-      <span>The key is stored locally in Windows Credential Manager and is not written into NOVA's source code.</span>
+        ? <div className="key-saved-row"><span><Check size={14}/> Connected · stored in Windows Credential Manager</span><button className="delete-entry" onClick={forgetKey}>Remove key</button></div>
+        : <div className="key-input-row"><input id="curseforge-api-key" type="password" autoComplete="off" value={apiKey} onChange={e=>setApiKey(e.target.value)} onKeyDown={e=>e.key==="Enter"&&saveKey()} placeholder="Paste your CurseForge API key"/><button className="primary-btn key-save-button" onClick={saveKey} disabled={!apiKey.trim()||keySaving}>{keySaving?"Saving…":"Connect securely"}</button></div>}
+      <span className="key-footnote">Your key stays on this PC and is never placed in NOVA's frontend source.</span>
     </div>}
-    <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks":"Search mods"}/></div>
-    {busy&&<div className="catalog-note">Loading {provider==="modrinth"?"Modrinth":"CurseForge"} results…</div>}
-    {error&&<div className="catalog-note error">{error}</div>}
-    {!busy&&!error&&hits.length===0&&<div className="catalog-note">No matching projects found.</div>}
-    <div className="catalog-grid">{hits.map(x=><article className="catalog-card" key={x.id}>{x.image?<img src={x.image} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<h3>{x.title}</h3><p>{x.description}</p><div className="catalog-meta"><span>{Number(x.downloads||0).toLocaleString()} downloads</span><a href={x.url} target="_blank" rel="noreferrer">View project ↗</a></div></article>)}</div>
-    <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>Previous</button><span>Page {page+1}</span><button className="secondary-btn" disabled={busy||hits.length===0} onClick={()=>setPage(p=>p+1)}>Next</button></div>
+    <div className="catalog-search-row">
+      <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks, themes, adventures…":"Search mods, performance, shaders, utilities…"}/>{q&&<button className="clear-search" onClick={()=>setQ("")} aria-label="Clear search"><X size={14}/></button>}</div>
+      <div className="catalog-source-pill"><span className="source-dot"/> {provider==="modrinth"?"MODRINTH INDEX":"CURSEFORGE API"}</div>
+    </div>
+    {busy&&<div className="catalog-state"><div className="loading-orbit"/><b>Finding great projects</b><span>Searching {provider==="modrinth"?"Modrinth":"CurseForge"}…</span></div>}
+    {error&&<div className="catalog-note error"><CircleHelp size={16}/><span>{error}</span></div>}
+    {!busy&&!error&&hits.length===0&&<div className="catalog-state"><div className="empty-library"><Blocks size={25}/></div><b>No projects found</b><span>Try another search or switch catalog source.</span></div>}
+    {!busy&&hits.length>0&&<div className="catalog-results-label"><span>{hits.length} PROJECTS ON THIS PAGE</span><span>PAGE {String(page+1).padStart(2,"0")}</span></div>}
+    <div className="catalog-grid">{hits.map((x,i)=><article className="catalog-card" key={x.id}>
+      <div className="project-card-top">{x.image?<img src={x.image} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<span className="project-source">{provider==="modrinth"?"MODRINTH":"CURSEFORGE"}</span><span className="project-rank">{String(page*24+i+1).padStart(2,"0")}</span></div>
+      <h3>{x.title}</h3><p>{x.description}</p>
+      <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
+    </article>)}</div>}
+    <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||hits.length===0} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
   </section>;
 }
 function LocalInstances() {
