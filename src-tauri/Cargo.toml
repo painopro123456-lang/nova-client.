@@ -15,6 +15,8 @@ crust_core = "1.0.3"
 tokio = { version = "1.53", features = ["rt-multi-thread", "macros"] }
 serde_json = "1"
 keyring = "3"
+zip = { version = "7.2", default-features = false, features = ["deflate"] }
+sha1 = "0.11"
 
 [features]
 default = ["custom-protocol"]
