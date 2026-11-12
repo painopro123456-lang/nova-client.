@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use crust_core::authenticator::{Account, Authenticator};
-use crust_core::launcher::{Launch, LaunchOptions};
+use crust_core::launcher::{Launch, LaunchOptions, LoaderKind};
 use keyring::Entry;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde_json::Value;
@@ -145,9 +145,23 @@ fn sign_out_minecraft() -> Result<(), String> {
 
 #[tauri::command]
 async fn launch_minecraft(version: String) -> Result<(), String> {
-    let allowed = ["1.21.4", "1.21.1", "1.20.4", "1.8.9"];
-    if !allowed.contains(&version.as_str()) {
-        return Err("That Minecraft version is not supported by this launcher yet.".into());
+    let version = version.trim();
+    if version.is_empty() || version.eq_ignore_ascii_case("null") || version.eq_ignore_ascii_case("undefined") {
+        return Err("No Minecraft version was selected. Choose a version and try again.".into());
+    }
+    let manifest = reqwest::Client::new()
+        .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
+        .send().await
+        .map_err(|e| format!("Could not verify Minecraft version {version}: {e}"))?
+        .error_for_status()
+        .map_err(|e| format!("Could not verify Minecraft version {version}: {e}"))?
+        .json::<Value>().await
+        .map_err(|e| format!("Could not read Minecraft version manifest: {e}"))?;
+    let known_version = manifest["versions"].as_array()
+        .map(|items| items.iter().any(|item| item["id"].as_str() == Some(version)))
+        .unwrap_or(false);
+    if !known_version {
+        return Err(format!("Minecraft version '{version}' was not found in Mojang's official version list. Refresh the version list and try again."));
     }
 
     let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
@@ -174,6 +188,15 @@ async fn launch_minecraft(version: String) -> Result<(), String> {
         .map_err(|e| format!("Could not create the Minecraft game folder: {e}"))?;
 
     let mut options = LaunchOptions::new(game_root, version);
+    match loader.as_deref().unwrap_or("vanilla") {
+        "vanilla" => {}
+        "fabric" => {
+            options.loader.kind = Some(LoaderKind::Fabric);
+            options.loader.build = "latest".to_owned();
+            options.loader.enable = true;
+        }
+        other => return Err(format!("Unsupported mod loader '{other}'. Choose Vanilla or Fabric.")),
+    }
     options.memory.max = "4G".to_owned();
     options.download_concurrency = 8;
 
