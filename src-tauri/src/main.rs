@@ -111,6 +111,8 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
     let login_url = flow.verification_uri_complete();
     app.emit("nova-login-link", login_url.clone())
         .map_err(|e| format!("Could not show the Microsoft sign-in link: {e}"))?;
+    // Open the system browser automatically; the frontend also displays the URL as a fallback.
+    let _ = webbrowser::open(&login_url);
 
     let account = flow.wait().await.map_err(|e| format!("Microsoft sign-in failed: {e}"))?;
     let account_json = serde_json::to_string(&account)
