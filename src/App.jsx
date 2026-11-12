@@ -68,6 +68,9 @@ function Catalog({ packs }) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [page,setPage]=useState(0);
+  const [installed,setInstalled]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.installedPacks")||"{}")}catch{return{}}});
+  const [installingId,setInstallingId]=useState("");
+  const [packActionMessage,setPackActionMessage]=useState("");
 
   useEffect(()=>{
     let alive=true;
@@ -103,6 +106,30 @@ function Catalog({ packs }) {
     },250);
     return ()=>{clearTimeout(timer);ctrl.abort();};
   },[q,packs,provider,keySaved,page]);
+
+  useEffect(()=>{localStorage.setItem("nova.installedPacks",JSON.stringify(installed));},[installed]);
+
+  const installPack=async(project)=>{
+    const key=String(project.id);
+    const instanceName=(project.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,32)||"modpack")+"-"+Date.now().toString().slice(-6);
+    setInstallingId(key);setPackActionMessage(`Preparing ${project.title}… This can download a large number of files.`);
+    try{
+      const metadata=provider==="modrinth"
+        ? await invoke("install_modrinth_modpack",{projectId:key,instanceName})
+        : await invoke("install_curseforge_modpack",{modId:key,instanceName});
+      setInstalled(old=>({...old,[key]:metadata}));
+      setPackActionMessage(`${metadata.name||project.title} installed. ${metadata.minecraftVersion} · ${metadata.loader}${metadata.loaderVersion?` ${metadata.loaderVersion}`:""}.`);
+    }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Modpack installation failed."));}
+    finally{setInstallingId("");}
+  };
+  const launchPack=async metadata=>{
+    setInstallingId(String(metadata.projectId));setPackActionMessage(`Preparing ${metadata.name}…`);
+    try{
+      await invoke("launch_minecraft",{version:metadata.minecraftVersion,loader:metadata.loader,loaderBuild:metadata.loaderVersion,instanceName:metadata.instanceName});
+      setPackActionMessage(`${metadata.name} has been started.`);
+    }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Could not launch this modpack."));}
+    finally{setInstallingId("");}
+  };
 
   const saveKey=async()=>{
     if(!apiKey.trim())return;
@@ -148,12 +175,16 @@ function Catalog({ packs }) {
     </div>
     {busy&&<div className="catalog-state"><div className="loading-orbit"/><b>Finding great projects</b><span>Searching {provider==="modrinth"?"Modrinth":"CurseForge"}…</span></div>}
     {error&&<div className="catalog-note error"><CircleHelp size={16}/><span>{error}</span></div>}
+    {packActionMessage&&packs&&<div className="catalog-note"><span>{packActionMessage}</span></div>}}
     {!busy&&!error&&hits.length===0&&<div className="catalog-state"><div className="empty-library"><Blocks size={25}/></div><b>No projects found</b><span>Try another search or switch catalog source.</span></div>}
     {!busy&&hits.length>0&&<div className="catalog-results-label"><span>{hits.length} PROJECTS ON THIS PAGE</span><span>PAGE {String(page+1).padStart(2,"0")}</span></div>}
     <div className="catalog-grid">{hits.map((x,i)=><article className="catalog-card" key={x.id}>
       <div className="project-card-top">{x.image?<img src={x.image} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<span className="project-source">{provider==="modrinth"?"MODRINTH":"CURSEFORGE"}</span><span className="project-rank">{String(page*24+i+1).padStart(2,"0")}</span></div>
       <h3>{x.title}</h3><p>{x.description}</p>
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
+      {packs&&<div className="pack-install-row">{installed[String(x.id)]
+        ? <button className="primary-btn" onClick={()=>launchPack(installed[String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Play installed pack"}</button>
+        : <button className="primary-btn" onClick={()=>installPack(x)} disabled={Boolean(installingId)|| (provider==="curseforge"&&!keySaved)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…":"Install modpack"}</button>}</div>}
     </article>)}</div>}
     <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||hits.length===0} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
   </section>;
