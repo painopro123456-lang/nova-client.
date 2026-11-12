@@ -75,12 +75,9 @@ jobs:
           $icon.Dispose()
           $graphics.Dispose()
           $bitmap.Dispose()
-          $font.Dispose()
           $brush.Dispose()
           $cut.Dispose()
           $star.Dispose()
-          $textBrush.Dispose()
-          $format.Dispose()
 
       - name: Verify frontend production build
         working-directory: D:/a/nova-src
