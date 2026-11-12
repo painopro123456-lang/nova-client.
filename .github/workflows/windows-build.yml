@@ -81,6 +81,7 @@ jobs:
         env:
           CARGO_TERM_COLOR: always
           RUST_BACKTRACE: 1
+          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
         run: npm run tauri -- build --verbose
 
       - name: Upload Windows installer
