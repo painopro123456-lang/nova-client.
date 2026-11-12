@@ -4,7 +4,11 @@ use crust_core::authenticator::{Account, Authenticator};
 use crust_core::launcher::{Launch, LaunchOptions, LoaderKind};
 use keyring::Entry;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
-use serde_json::Value;
+use serde_json::{json, Value};
+use sha1::{Digest, Sha1};
+use std::io::{Cursor, Read};
+use std::path::{Component, Path, PathBuf};
+use zip::ZipArchive;
 use tauri::Emitter;
 
 const KEYRING_SERVICE: &str = "NOVA Client";
@@ -157,8 +161,19 @@ async fn minecraft_versions() -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn launch_minecraft(version: String, loader: Option<String>) -> Result<(), String> {
-    let version = version.trim();
+async fn launch_minecraft(version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>) -> Result<(), String> {
+    let mut version = version.trim().to_owned();
+    let mut loader = loader.unwrap_or_else(|| "vanilla".to_owned());
+    let mut loader_build = loader_build.unwrap_or_else(|| "latest".to_owned());
+    if let Some(instance) = instance_name.as_deref() {
+        let folder = instance_folder(instance)?;
+        let metadata: Value = serde_json::from_slice(&std::fs::read(folder.join("nova-instance.json"))
+            .map_err(|e| format!("Could not read installed instance: {e}"))?)
+            .map_err(|e| format!("Installed instance metadata is invalid: {e}"))?;
+        version = metadata["minecraftVersion"].as_str().ok_or("Installed instance has no Minecraft version.")?.to_owned();
+        loader = metadata["loader"].as_str().unwrap_or("vanilla").to_owned();
+        loader_build = metadata["loaderVersion"].as_str().unwrap_or("latest").to_owned();
+    }
     if version.is_empty() || version.eq_ignore_ascii_case("null") || version.eq_ignore_ascii_case("undefined") {
         return Err("No Minecraft version was selected. Choose a version and try again.".into());
     }
@@ -171,7 +186,7 @@ async fn launch_minecraft(version: String, loader: Option<String>) -> Result<(),
         .json::<Value>().await
         .map_err(|e| format!("Could not read Minecraft version manifest: {e}"))?;
     let known_version = manifest["versions"].as_array()
-        .map(|items| items.iter().any(|item| item["id"].as_str() == Some(version)))
+        .map(|items| items.iter().any(|item| item["id"].as_str() == Some(version.as_str())))
         .unwrap_or(false);
     if !known_version {
         return Err(format!("Minecraft version '{version}' was not found in Mojang's official version list. Refresh the version list and try again."));
@@ -201,14 +216,21 @@ async fn launch_minecraft(version: String, loader: Option<String>) -> Result<(),
         .map_err(|e| format!("Could not create the Minecraft game folder: {e}"))?;
 
     let mut options = LaunchOptions::new(game_root, version);
-    match loader.as_deref().unwrap_or("vanilla") {
+    if let Some(name) = instance_name.as_deref() {
+        options.instance = Some(safe_instance_name(name)?);
+    }
+    match loader.as_str() {
         "vanilla" => {}
-        "fabric" => {
-            options.loader.kind = Some(LoaderKind::Fabric);
-            options.loader.build = "latest".to_owned();
-            options.loader.enable = true;
-        }
-        other => return Err(format!("Unsupported mod loader '{other}'. Choose Vanilla or Fabric.")),
+        "fabric" => options.loader.kind = Some(LoaderKind::Fabric),
+        "forge" => options.loader.kind = Some(LoaderKind::Forge),
+        "neoforge" => options.loader.kind = Some(LoaderKind::NeoForge),
+        "quilt" => options.loader.kind = Some(LoaderKind::Quilt),
+        "legacyfabric" => options.loader.kind = Some(LoaderKind::LegacyFabric),
+        other => return Err(format!("Unsupported mod loader '{other}'.")),
+    }
+    if loader != "vanilla" {
+        options.loader.build = loader_build;
+        options.loader.enable = true;
     }
     options.memory.max = "4G".to_owned();
     options.download_concurrency = 8;
@@ -225,6 +247,235 @@ async fn launch_minecraft(version: String, loader: Option<String>) -> Result<(),
     Ok(())
 }
 
+
+fn safe_instance_name(input: &str) -> Result<String, String> {
+    let value: String = input.trim().chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .take(48).collect();
+    if value.is_empty() {
+        return Err("Give this modpack a name containing letters or numbers.".into());
+    }
+    Ok(value)
+}
+
+fn safe_relative_path(input: &str) -> Result<PathBuf, String> {
+    let normalized = input.replace('\\', "/");
+    let path = Path::new(&normalized);
+    if path.is_absolute() || path.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+        return Err(format!("The pack contains an unsafe file path: {input}"));
+    }
+    Ok(path.to_path_buf())
+}
+
+fn instance_folder(instance_name: &str) -> Result<PathBuf, String> {
+    let local = std::env::var("LOCALAPPDATA")
+        .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
+    Ok(PathBuf::from(local).join("NOVA Client").join("minecraft").join("instances").join(safe_instance_name(instance_name)?))
+}
+
+fn extract_pack_overrides(bytes: &[u8], prefix: &str, destination: &Path) -> Result<(), String> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes))
+        .map_err(|e| format!("The modpack archive is invalid: {e}"))?;
+    for index in 0..archive.len() {
+        let mut entry = archive.by_index(index)
+            .map_err(|e| format!("Could not read modpack archive entry: {e}"))?;
+        let entry_name = entry.name().replace('\\', "/");
+        let Some(relative) = entry_name.strip_prefix(prefix) else { continue };
+        if relative.is_empty() { continue; }
+        let relative_path = safe_relative_path(relative)?;
+        let output = destination.join(relative_path);
+        if entry.is_dir() {
+            std::fs::create_dir_all(&output)
+                .map_err(|e| format!("Could not create pack folder: {e}"))?;
+        } else {
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| format!("Could not create pack folder: {e}"))?;
+            }
+            let mut file_bytes = Vec::new();
+            entry.read_to_end(&mut file_bytes)
+                .map_err(|e| format!("Could not extract pack override: {e}"))?;
+            std::fs::write(&output, file_bytes)
+                .map_err(|e| format!("Could not write pack override: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+    if !url.starts_with("https://") {
+        return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());
+    }
+    reqwest::Client::new().get(url).send().await
+        .map_err(|e| format!("Download failed: {e}"))?
+        .error_for_status().map_err(|e| format!("Download server returned an error: {e}"))?
+        .bytes().await.map(|b| b.to_vec())
+        .map_err(|e| format!("Could not read downloaded file: {e}"))
+}
+
+async fn download_pack_file(url: &str, destination: &Path, expected_size: Option<u64>, expected_sha1: Option<&str>) -> Result<(), String> {
+    let bytes = fetch_bytes(url).await?;
+    if let Some(size) = expected_size {
+        if bytes.len() as u64 != size {
+            return Err(format!("A mod file had an unexpected size (expected {size}, received {}).", bytes.len()));
+        }
+    }
+    if let Some(expected) = expected_sha1.filter(|s| !s.is_empty()) {
+        let digest = Sha1::digest(&bytes);
+        let actual = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        if !actual.eq_ignore_ascii_case(expected) {
+            return Err("A mod file failed its SHA-1 integrity check.".into());
+        }
+    }
+    if let Some(parent) = destination.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Could not create mod folder: {e}"))?;
+    }
+    std::fs::write(destination, bytes).map_err(|e| format!("Could not save a downloaded mod: {e}"))
+}
+
+fn loader_from_id(id: &str) -> Result<(String, String), String> {
+    let (kind, build) = id.split_once('-')
+        .ok_or_else(|| format!("The modpack has an unsupported loader identifier: {id}"))?;
+    let loader = match kind.to_ascii_lowercase().as_str() {
+        "fabric" => "fabric",
+        "forge" => "forge",
+        "neoforge" => "neoforge",
+        "quilt" => "quilt",
+        "legacyfabric" => "legacyfabric",
+        other => return Err(format!("NOVA does not support the '{other}' mod loader in this pack.")),
+    };
+    if build.trim().is_empty() { return Err(format!("The modpack has no loader build in '{id}'.")); }
+    Ok((loader.to_owned(), build.to_owned()))
+}
+
+fn save_instance_metadata(folder: &Path, metadata: Value) -> Result<Value, String> {
+    std::fs::create_dir_all(folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    std::fs::write(folder.join("nova-instance.json"), serde_json::to_vec_pretty(&metadata)
+        .map_err(|e| format!("Could not prepare instance metadata: {e}"))?)
+        .map_err(|e| format!("Could not save instance metadata: {e}"))?;
+    Ok(metadata)
+}
+
+#[tauri::command]
+async fn install_modrinth_modpack(project_id: String, instance_name: String) -> Result<Value, String> {
+    let name = safe_instance_name(&instance_name)?;
+    let client = reqwest::Client::new();
+    let versions: Value = client.get(format!("https://api.modrinth.com/v2/project/{project_id}/version"))
+        .send().await.map_err(|e| format!("Could not reach Modrinth: {e}"))?
+        .error_for_status().map_err(|e| format!("Modrinth returned an error: {e}"))?
+        .json().await.map_err(|e| format!("Modrinth returned an unreadable version list: {e}"))?;
+    let latest = versions.as_array().and_then(|a| a.first())
+        .ok_or_else(|| "Modrinth has no downloadable versions for this modpack.".to_string())?;
+    let version_id = latest["id"].as_str().ok_or("Modrinth version ID is missing.")?;
+    let file = latest["files"].as_array().and_then(|a| a.iter().find(|f| f["primary"].as_bool() == Some(true)).or_else(|| a.first()))
+        .ok_or("Modrinth did not provide a modpack archive.")?;
+    let download_url = file["url"].as_str().ok_or("Modrinth download URL is missing.")?;
+    let archive_bytes = fetch_bytes(download_url).await?;
+    let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
+        .map_err(|e| format!("The Modrinth pack is not a valid ZIP archive: {e}"))?;
+    let mut index_bytes = Vec::new();
+    archive.by_name("modrinth.index.json")
+        .map_err(|_| "This Modrinth archive is missing modrinth.index.json.".to_string())?
+        .read_to_end(&mut index_bytes).map_err(|e| format!("Could not read Modrinth manifest: {e}"))?;
+    let index: Value = serde_json::from_slice(&index_bytes)
+        .map_err(|e| format!("Modrinth manifest is invalid: {e}"))?;
+    if index["formatVersion"].as_u64() != Some(1) {
+        return Err("This Modrinth modpack format is not supported.".into());
+    }
+    let mc_version = index["dependencies"]["minecraft"]["version"].as_str()
+        .ok_or("Modrinth pack does not specify a Minecraft version.")?.to_owned();
+    let loader_entry = ["fabric-loader", "forge", "neoforge", "quilt-loader", "legacy-fabric"]
+        .iter().find_map(|key| index["dependencies"][*key].as_str().map(|v| (*key, v)));
+    let (loader, loader_build) = if let Some((key, build)) = loader_entry {
+        (match key { "fabric-loader"=>"fabric", "quilt-loader"=>"quilt", "legacy-fabric"=>"legacyfabric", other=>other }.to_owned(), build.to_owned())
+    } else { ("vanilla".to_owned(), String::new()) };
+    let folder = instance_folder(&name)?;
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    for (i, item) in index["files"].as_array().ok_or("Modrinth manifest has no files list.")?.iter().enumerate() {
+        if item["env"]["client"].as_str() == Some("unsupported") { continue; }
+        let relative = safe_relative_path(item["path"].as_str().ok_or("A Modrinth file path is missing.")?)?;
+        let urls = item["downloads"].as_array().ok_or("A Modrinth file has no download URLs.")?;
+        let url = urls.first().and_then(Value::as_str).ok_or("A Modrinth file has no usable download URL.")?;
+        let size = item["fileSize"].as_u64();
+        let sha1 = item["hashes"]["sha1"].as_str();
+        download_pack_file(url, &folder.join(relative), size, sha1).await
+            .map_err(|e| format!("Mod file {} of {}: {e}", i + 1, index["files"].as_array().map(|a|a.len()).unwrap_or(0)))?;
+    }
+    extract_pack_overrides(&archive_bytes, "overrides/", &folder)?;
+    extract_pack_overrides(&archive_bytes, "client-overrides/", &folder)?;
+    let title = index["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(&name).to_owned();
+    save_instance_metadata(&folder, json!({
+        "instanceName":name,"name":title,"minecraftVersion":mc_version,"loader":loader,
+        "loaderVersion":loader_build,"source":"modrinth","projectId":project_id,"packVersionId":version_id
+    }))
+}
+
+#[tauri::command]
+async fn install_curseforge_modpack(mod_id: String, instance_name: String) -> Result<Value, String> {
+    let name = safe_instance_name(&instance_name)?;
+    let api_key = credential_entry(KEYRING_USER)?.get_password()
+        .map_err(|_| "Save your approved CurseForge API key in NOVA before installing a CurseForge pack.".to_string())?;
+    let client = reqwest::Client::new();
+    let mut headers = HeaderMap::new();
+    headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
+    headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+    let files: Value = client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files"))
+        .headers(headers.clone()).query(&[("pageSize","50"),("index","0")])
+        .send().await.map_err(|e| format!("Could not reach CurseForge: {e}"))?
+        .error_for_status().map_err(|e| format!("CurseForge could not list pack files: {e}"))?
+        .json().await.map_err(|e| format!("CurseForge returned an unreadable file list: {e}"))?;
+    let latest = files["data"].as_array().and_then(|a| a.first())
+        .ok_or("CurseForge has no downloadable files for this modpack.")?;
+    let file_id = latest["id"].as_u64().ok_or("CurseForge file ID is missing.")?;
+    let manifest_url: String = client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}/download-url"))
+        .headers(headers.clone()).send().await.map_err(|e| format!("Could not request the CurseForge pack download: {e}"))?
+        .error_for_status().map_err(|e| format!("CurseForge did not provide a download URL: {e}"))?
+        .json::<Value>().await.map_err(|e| format!("CurseForge download response was unreadable: {e}"))?["data"]
+        .as_str().ok_or("CurseForge did not provide a downloadable archive URL for this file.")?.to_owned();
+    let archive_bytes = fetch_bytes(&manifest_url).await?;
+    let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
+        .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
+    let mut manifest_bytes = Vec::new();
+    archive.by_name("manifest.json").map_err(|_| "This CurseForge archive is missing manifest.json.".to_string())?
+        .read_to_end(&mut manifest_bytes).map_err(|e| format!("Could not read CurseForge manifest: {e}"))?;
+    let manifest: Value = serde_json::from_slice(&manifest_bytes)
+        .map_err(|e| format!("CurseForge manifest is invalid: {e}"))?;
+    if manifest["manifestType"].as_str() != Some("minecraftModpack") {
+        return Err("The downloaded CurseForge file is not a Minecraft modpack.".into());
+    }
+    let mc_version = manifest["minecraft"]["version"].as_str()
+        .ok_or("CurseForge pack does not specify a Minecraft version.")?.to_owned();
+    let loader_entry = manifest["minecraft"]["modLoaders"].as_array()
+        .and_then(|a| a.iter().find(|v| v["primary"].as_bool() == Some(true)).or_else(|| a.first()))
+        .and_then(|v| v["id"].as_str());
+    let (loader, loader_build) = if let Some(id) = loader_entry { loader_from_id(id)? } else { ("vanilla".into(), String::new()) };
+    let folder = instance_folder(&name)?;
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    let pack_files = manifest["files"].as_array().ok_or("CurseForge manifest has no files list.")?;
+    for (i, item) in pack_files.iter().enumerate() {
+        if item["required"].as_bool() == Some(false) { continue; }
+        let project = item["projectID"].as_u64().ok_or("CurseForge project ID is missing.")?;
+        let file = item["fileID"].as_u64().ok_or("CurseForge file ID is missing.")?;
+        let url: String = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}/download-url"))
+            .headers(headers.clone()).send().await.map_err(|e| format!("Could not resolve CurseForge mod {}: {e}", i+1))?
+            .error_for_status().map_err(|e| format!("CurseForge could not provide mod {}: {e}", i+1))?
+            .json::<Value>().await.map_err(|e| format!("CurseForge mod {} response was unreadable: {e}", i+1))?["data"]
+            .as_str().ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}. The author may have disabled third-party downloads."))?.to_owned();
+        let bytes = fetch_bytes(&url).await?;
+        let filename = format!("{project}-{file}.jar");
+        std::fs::create_dir_all(folder.join("mods")).map_err(|e| format!("Could not create mods folder: {e}"))?;
+        std::fs::write(folder.join("mods").join(filename), bytes)
+            .map_err(|e| format!("Could not save CurseForge mod {}: {e}", i+1))?;
+    }
+    extract_pack_overrides(&archive_bytes, "overrides/", &folder)?;
+    let title = manifest["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(&name).to_owned();
+    save_instance_metadata(&folder, json!({
+        "instanceName":name,"name":title,"minecraftVersion":mc_version,"loader":loader,
+        "loaderVersion":loader_build,"source":"curseforge","projectId":mod_id,"packFileId":file_id
+    }))
+}
+
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
@@ -236,7 +487,9 @@ fn main() {
             minecraft_account_name,
             sign_out_minecraft,
             minecraft_versions,
-            launch_minecraft
+            launch_minecraft,
+            install_modrinth_modpack,
+            install_curseforge_modpack
         ])
         .run(tauri::generate_context!())
         .expect("error while running NOVA Client");
