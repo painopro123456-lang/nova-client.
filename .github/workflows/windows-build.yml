@@ -18,6 +18,7 @@ permissions:
 jobs:
   build:
     runs-on: windows-latest
+    timeout-minutes: 45
     steps:
       - name: Clone source to a Windows-safe path
         shell: pwsh
@@ -71,9 +72,16 @@ jobs:
           $textBrush.Dispose()
           $format.Dispose()
 
-      - name: Build NOVA Windows installer
+      - name: Verify frontend production build
         working-directory: D:/a/nova-src
-        run: npm run tauri -- build
+        run: npm run build
+
+      - name: Build NOVA Windows installer (verbose)
+        working-directory: D:/a/nova-src
+        env:
+          CARGO_TERM_COLOR: always
+          RUST_BACKTRACE: 1
+        run: npm run tauri -- build --verbose
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
