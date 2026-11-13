@@ -178,6 +178,76 @@ async fn minecraft_versions() -> Result<Value, String> {
 }
 
 #[tauri::command]
+async fn prepare_modpack_instance(instance_name: String) -> Result<Value, String> {
+    let name = safe_instance_name(&instance_name)?;
+    let folder = instance_folder(&name)?;
+    let metadata: Value = serde_json::from_slice(
+        &std::fs::read(folder.join("nova-instance.json"))
+            .map_err(|e| format!("Could not read modpack instance: {e}"))?
+    ).map_err(|e| format!("Modpack instance metadata is invalid: {e}"))?;
+
+    let version = metadata["minecraftVersion"].as_str()
+        .ok_or("The modpack has no Minecraft version.")?.to_owned();
+    let loader = metadata["loader"].as_str().unwrap_or("vanilla").to_ascii_lowercase();
+    let loader_build = metadata["loaderVersion"].as_str().unwrap_or("latest").to_owned();
+
+    // Preparing a modpack installs Minecraft, Java, libraries, assets and its loader
+    // into the selected instance without starting the game.
+    let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
+        .get_password()
+        .map_err(|_| "Sign in with Microsoft before completing the modpack installation.".to_string())?;
+    let saved_account: Account = serde_json::from_str(&account_json)
+        .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
+    let auth = Authenticator::new()
+        .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
+    let account = auth.refresh(&saved_account).await
+        .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
+    let refreshed_json = serde_json::to_string(&account)
+        .map_err(|e| format!("Could not update the saved account: {e}"))?;
+    credential_entry(MINECRAFT_ACCOUNT_USER)?
+        .set_password(&refreshed_json)
+        .map_err(|e| format!("Could not update the secure account store: {e}"))?;
+
+    let local_app_data = std::env::var("LOCALAPPDATA")
+        .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
+    let game_root = PathBuf::from(local_app_data)
+        .join("NOVA Client").join("minecraft");
+    std::fs::create_dir_all(&game_root)
+        .map_err(|e| format!("Could not create the Minecraft game folder: {e}"))?;
+
+    let mut options = LaunchOptions::new(game_root, version.clone());
+    options.instance = Some(name.clone());
+    match loader.as_str() {
+        "vanilla" => {}
+        "fabric" => options.loader.kind = Some(LoaderKind::Fabric),
+        "forge" => options.loader.kind = Some(LoaderKind::Forge),
+        "neoforge" => options.loader.kind = Some(LoaderKind::NeoForge),
+        "quilt" => options.loader.kind = Some(LoaderKind::Quilt),
+        "legacyfabric" => options.loader.kind = Some(LoaderKind::LegacyFabric),
+        other => return Err(format!("Unsupported mod loader '{other}' in this modpack.")),
+    }
+    if loader != "vanilla" {
+        options.loader.build = loader_build.clone();
+        options.loader.enable = true;
+    }
+    options.memory.max = "4G".to_owned();
+    options.download_concurrency = 8;
+
+    let launch = Launch::new(options, account)
+        .map_err(|e| format!("Could not prepare modpack installation: {e}"))?;
+    launch.prepare().await
+        .map_err(|e| format!("Minecraft or mod-loader installation failed: {e}"))?;
+
+    Ok(json!({
+        "ready": true,
+        "instanceName": name,
+        "minecraftVersion": version,
+        "loader": loader,
+        "loaderVersion": loader_build
+    }))
+}
+
+#[tauri::command]
 async fn launch_minecraft(version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>) -> Result<(), String> {
     let mut version = version.trim().to_owned();
     let mut loader = loader.unwrap_or_else(|| "vanilla".to_owned());
@@ -552,6 +622,7 @@ fn main() {
             sign_out_minecraft,
             minecraft_versions,
             launch_minecraft,
+            prepare_modpack_instance,
             install_modrinth_modpack,
             curseforge_modpack_versions,
             install_curseforge_modpack,
