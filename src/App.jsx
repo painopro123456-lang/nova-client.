@@ -7,7 +7,7 @@ import {
   Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box, CheckCircle2,
   ChevronDown, CircleHelp, Compass, Cpu, Gamepad2, Gauge, HardDrive,
   Layers3, LayoutDashboard, Monitor, Moon, MoreHorizontal, Play, Plus,
-  Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Users,
+  Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Users, Package, ScrollText,
   WandSparkles, Wifi, X
 } from "lucide-react";
 
@@ -260,6 +260,7 @@ function LocalInstances({ versions, memoryMb }) {
   const [versionFilter,setVersionFilter]=useState("release");
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
+  const [instancePanel,setInstancePanel]=useState(null);
   const [showCustom,setShowCustom]=useState(false);
   const [creating,setCreating]=useState(false);
   useEffect(()=>{
@@ -300,6 +301,20 @@ function LocalInstances({ versions, memoryMb }) {
     try{await invoke("launch_minecraft",{version:item.minecraftVersion||item.version,loader:item.loader||"vanilla",loaderBuild:item.loaderVersion||"latest",instanceName:item.instanceName,memoryMb});setAction(item.name+" started.");}
     catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}
   };
+  const openInstancePanel=async(instance,tab)=>{
+    setInstancePanel({instance,tab,loading:true,content:[],logs:"",error:""});
+    try{
+      if(tab==="content"){
+        const content=await invoke("list_instance_content",{instanceName:instance.instanceName});
+        setInstancePanel(current=>current?{...current,loading:false,content:Array.isArray(content)?content:[]}:current);
+      }else{
+        const result=await invoke("get_game_logs",{instanceName:instance.instanceName});
+        setInstancePanel(current=>current?{...current,loading:false,logs:result?.minecraftLog||"No Minecraft logs found."}:current);
+      }
+    }catch(error){
+      setInstancePanel(current=>current?{...current,loading:false,error:typeof error==="string"?error:(error.message||"Could not load instance data.")}:current);
+    }
+  };
   const removePack=async(id,pack)=>{
     setAction("Deleting "+pack.name+"…");
     try{
@@ -320,11 +335,19 @@ function LocalInstances({ versions, memoryMb }) {
     {installedPacks.length>0&&<><div className="section-heading"><div><div className="eyebrow">MODPACK LIBRARY</div><h2>Installed modpacks</h2></div><span className="instance-count">{installedPacks.length} PACK{installedPacks.length===1?"":"S"}</span></div><div className="instance-grid">{installedPacks.map(([id,pack])=><article className="instance-card" key={id}>
       <div className="instance-card-art">{pack.iconUrl?<img src={pack.iconUrl} alt="" loading="lazy" onError={e=>{e.currentTarget.style.display="none";}}/>:<Box size={30}/>}</div>
       <div className="instance-card-copy"><div className="instance-card-kicker">MODPACK · {pack.source}</div><b>{pack.name}</b><span>Minecraft {pack.minecraftVersion} · {pack.loader}{pack.loaderVersion?" "+pack.loaderVersion:""}</span></div>
-      <div className="instance-card-actions"><button className="primary-btn" onClick={()=>playPack(pack)}><Play size={13} fill="currentColor"/> Play</button><button className="delete-entry" onClick={()=>removePack(id,pack)}>Delete</button></div>
+      <div className="instance-card-actions"><button className="primary-btn" onClick={()=>playPack(pack)}><Play size={13} fill="currentColor"/> Play</button><button className="secondary-btn" onClick={()=>openInstancePanel(pack,"content")}><Package size={13}/> Content</button><button className="secondary-btn" onClick={()=>openInstancePanel(pack,"logs")}><ScrollText size={13}/> Logs</button><button className="delete-entry" onClick={()=>removePack(id,pack)}>Delete</button></div>
     </article>)}</div></>}
     <div className="section-heading instance-subheading"><div><div className="eyebrow">YOUR SETUPS</div><h2>Custom instances</h2></div><span className="instance-count">{items.length} INSTANCE{items.length===1?"":"S"}</span></div>
-    {items.length===0?<div className="instances-empty"><div className="empty-orbit"><Layers3 size={24}/></div><b>No custom instances yet</b><span>Create a clean Minecraft profile with the version and loader you want.</span><button className="secondary-btn" onClick={()=>setShowCustom(true)}><Plus size={14}/> Create your first instance</button></div>:<div className="instance-grid">{items.map(x=><article className="instance-card custom-card" key={x.instanceName||x.id}><div className="instance-card-art custom-art"><Box size={28}/></div><div className="instance-card-copy"><div className="instance-card-kicker">CUSTOM PROFILE</div><b>{x.name}</b><span>Minecraft {x.minecraftVersion||x.version} · {x.loader||"vanilla"}</span></div><div className="instance-card-actions"><button className="primary-btn" onClick={()=>playCustom(x)}><Play size={13} fill="currentColor"/> Install & Play</button><button className="delete-entry" onClick={()=>removeCustom(x)}>Delete</button></div></article>)}</div>}
+    {items.length===0?<div className="instances-empty"><div className="empty-orbit"><Layers3 size={24}/></div><b>No custom instances yet</b><span>Create a clean Minecraft profile with the version and loader you want.</span><button className="secondary-btn" onClick={()=>setShowCustom(true)}><Plus size={14}/> Create your first instance</button></div>:<div className="instance-grid">{items.map(x=><article className="instance-card custom-card" key={x.instanceName||x.id}><div className="instance-card-art custom-art"><Box size={28}/></div><div className="instance-card-copy"><div className="instance-card-kicker">CUSTOM PROFILE</div><b>{x.name}</b><span>Minecraft {x.minecraftVersion||x.version} · {x.loader||"vanilla"}</span></div><div className="instance-card-actions"><button className="primary-btn" onClick={()=>playCustom(x)}><Play size={13} fill="currentColor"/> Install & Play</button><button className="secondary-btn" onClick={()=>openInstancePanel(x,"content")}><Package size={13}/> Content</button><button className="secondary-btn" onClick={()=>openInstancePanel(x,"logs")}><ScrollText size={13}/> Logs</button><button className="delete-entry" onClick={()=>removeCustom(x)}>Delete</button></div></article>)}</div>}
     {action&&<div className="catalog-note">{action}</div>}
+    {instancePanel&&<div className="custom-instance-backdrop" role="presentation" onClick={()=>setInstancePanel(null)}><section className="custom-instance-dialog" role="dialog" aria-modal="true" aria-labelledby="instance-panel-title" onClick={e=>e.stopPropagation()} style={{maxWidth:760}}>
+      <div className="custom-dialog-top"><div><div className="eyebrow">{instancePanel.tab==="content"?"INSTANCE CONTENT":"MINECRAFT LOGS"}</div><h2 id="instance-panel-title">{instancePanel.instance.name||instancePanel.instance.instanceName}</h2><p>{instancePanel.tab==="content"?"Installed mod files in this instance.":"Latest Minecraft log for this instance."}</p></div><button className="icon-btn" onClick={()=>setInstancePanel(null)} aria-label="Close"><X size={17}/></button></div>
+      {instancePanel.loading?<div className="catalog-note">Loading {instancePanel.tab==="content"?"installed mods":"Minecraft logs"}…</div>:instancePanel.error?<div className="catalog-note error">{instancePanel.error}</div>:instancePanel.tab==="content"?<div style={{maxHeight:440,overflowY:"auto",display:"grid",gap:8}}>
+        <div className="feature-status">{instancePanel.content.length} MOD FILE{instancePanel.content.length===1?"":"S"}</div>
+        {instancePanel.content.length===0?<div className="catalog-note">No mod JAR files found in this instance yet.</div>:instancePanel.content.map((file,index)=><div key={file.name+index} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 12px",border:"1px solid var(--border-color,rgba(255,255,255,.08))",borderRadius:10}}><span style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}><Package size={16}/><b style={{fontSize:13,overflowWrap:"anywhere"}}>{file.name}</b></span><span className="feature-status" style={{whiteSpace:"nowrap"}}>{file.size<1048576?(file.size/1024).toFixed(0)+" KB":(file.size/1048576).toFixed(1)+" MB"}</span></div>)}
+      </div>:<pre className="catalog-note" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:460,overflowY:"auto",fontSize:12,lineHeight:1.6}}>{instancePanel.logs}</pre>}
+      <div className="pack-version-actions"><button className="secondary-btn" onClick={()=>openInstancePanel(instancePanel.instance,instancePanel.tab)} disabled={instancePanel.loading}>Refresh</button><button className="primary-btn" onClick={()=>setInstancePanel(null)}>Done</button></div>
+    </section></div>}
     {showCustom&&<div className="custom-instance-backdrop" role="presentation" onClick={()=>setShowCustom(false)}><section className="custom-instance-dialog" role="dialog" aria-modal="true" aria-labelledby="custom-instance-title" onClick={e=>e.stopPropagation()}>
       <div className="custom-dialog-top"><div><div className="eyebrow">NOVA INSTANCE BUILDER</div><h2 id="custom-instance-title">Create custom instance</h2><p>Choose a Minecraft version, pick a loader, and give this profile a name.</p></div><button className="icon-btn" onClick={()=>setShowCustom(false)} aria-label="Close"><X size={17}/></button></div>
       <div className="custom-form-grid"><label className="custom-field custom-name-field"><span>INSTANCE NAME</span><input autoFocus value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="e.g. Survival, PvP, Modded"/></label>
