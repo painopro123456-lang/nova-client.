@@ -6,7 +6,7 @@ use keyring::Entry;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::fs::File;
@@ -470,13 +470,21 @@ fn extract_pack_overrides(archive_path:&Path,prefix:&str,destination:&Path)->Res
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("Could not create pack folder: {e}"))?;
             }
-            let mut file_bytes = Vec::new();
-            entry.read_to_end(&mut file_bytes)
-                .map_err(|e| format!("Could not extract pack override: {e}"))?;
-            write_atomic(&output,&file_bytes).map_err(|e|format!("Could not write pack override: {e}"))?;
+            copy_atomic(&mut entry,&output).map_err(|e|format!("Could not extract pack override: {e}"))?;
         }
     }
     Ok(())
+}
+
+fn copy_atomic<R:Read>(source:&mut R,destination:&Path)->Result<(),String>{
+    if let Some(parent)=destination.parent(){std::fs::create_dir_all(parent).map_err(|e|format!("Could not create override folder: {e}"))?;}
+    let temp=destination.with_extension(format!("nova-{}.part",std::process::id()));
+    let mut output=File::create(&temp).map_err(|e|format!("Could not create temporary override: {e}"))?;
+    if let Err(error)=std::io::copy(source,&mut output){drop(output);let _=std::fs::remove_file(&temp);return Err(format!("Could not copy override data: {error}"));}
+    output.flush().map_err(|e|format!("Could not finish override file: {e}"))?;
+    drop(output);
+    if destination.exists(){std::fs::remove_file(destination).map_err(|e|format!("Could not replace override file: {e}"))?;}
+    std::fs::rename(&temp,destination).map_err(|e|{let _=std::fs::remove_file(&temp);format!("Could not finalize override file: {e}")})
 }
 
 fn write_atomic(destination:&Path,bytes:&[u8])->Result<(),String>{
@@ -576,10 +584,10 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let archive_file=File::open(&archive_path).map_err(|e|format!("Could not open Modrinth archive: {e}"))?;
     let mut archive=ZipArchive::new(archive_file)
         .map_err(|e| format!("The Modrinth pack is not a valid ZIP archive: {e}"))?;
-    let mut index_bytes = Vec::new();
-    archive.by_name("modrinth.index.json")
-        .map_err(|_| "This Modrinth archive is missing modrinth.index.json.".to_string())?
-        .read_to_end(&mut index_bytes).map_err(|e| format!("Could not read Modrinth manifest: {e}"))?;
+    let mut index_bytes=Vec::new();
+    let mut index_entry=archive.by_name("modrinth.index.json").map_err(|_|"This Modrinth archive is missing modrinth.index.json.".to_string())?;
+    if index_entry.size()>16*1024*1024{return Err("The Modrinth manifest is unexpectedly large.".into());}
+    index_entry.read_to_end(&mut index_bytes).map_err(|e|format!("Could not read Modrinth manifest: {e}"))?;
     let index: Value = serde_json::from_slice(&index_bytes)
         .map_err(|e| format!("Modrinth manifest is invalid: {e}"))?;
     if index["formatVersion"].as_u64() != Some(1) {
@@ -701,9 +709,10 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     let archive_file=File::open(&archive_path).map_err(|e|format!("Could not open CurseForge archive: {e}"))?;
     let mut archive=ZipArchive::new(archive_file)
         .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
-    let mut manifest_bytes = Vec::new();
-    archive.by_name("manifest.json").map_err(|_| "This CurseForge archive is missing manifest.json.".to_string())?
-        .read_to_end(&mut manifest_bytes).map_err(|e| format!("Could not read CurseForge manifest: {e}"))?;
+    let mut manifest_bytes=Vec::new();
+    let mut manifest_entry=archive.by_name("manifest.json").map_err(|_|"This CurseForge archive is missing manifest.json.".to_string())?;
+    if manifest_entry.size()>16*1024*1024{return Err("The CurseForge manifest is unexpectedly large.".into());}
+    manifest_entry.read_to_end(&mut manifest_bytes).map_err(|e|format!("Could not read CurseForge manifest: {e}"))?;
     let manifest: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|e| format!("CurseForge manifest is invalid: {e}"))?;
     if manifest["manifestType"].as_str() != Some("minecraftModpack") {
