@@ -171,3 +171,30 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .nova-download-toast-details{margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.08);color:#aab0c2;font-size:10px;line-height:1.55;overflow-wrap:anywhere}
 .nova-download-toast-details p{margin:7px 0 0;color:#ffaaaa}
 @media(max-width:520px){.nova-download-toast{top:10px;right:10px;width:calc(100vw - 20px)}}
+
+
+/* Premium selectable modpack release picker */
+.pack-version-dialog.modpack-version-dialog{width:min(590px,100%);padding:25px;background:radial-gradient(ellipse at 90% 0%,rgba(139,123,255,.16),transparent 42%),linear-gradient(155deg,#191d2d 0%,#101522 72%);border-color:rgba(165,138,255,.34);}
+.pack-version-dialog-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:20px}
+.pack-version-dialog-top h3{font-size:23px;letter-spacing:-.75px;margin:8px 0 5px}
+.pack-version-dialog-top p{font-size:11px;color:#9ba3ba;margin:0;line-height:1.5}
+.pack-version-close{display:grid;place-items:center;flex:none;width:32px;height:32px;border:1px solid rgba(255,255,255,.09);border-radius:9px;background:rgba(255,255,255,.04);color:#aeb5c9;cursor:pointer}
+.pack-version-close:hover{background:rgba(255,255,255,.1);color:#fff}
+.pack-version-list-heading{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:18px 1px 9px;color:#9ea6bd;font-size:9px;font-weight:750;letter-spacing:1.1px}
+.pack-version-list-heading span:last-child{color:#8b83b8;font-variant-numeric:tabular-nums}
+.pack-version-list{display:flex;flex-direction:column;gap:8px;max-height:min(390px,48vh);overflow-y:auto;padding:2px 5px 3px 1px;scrollbar-width:thin;scrollbar-color:#555078 transparent}
+.pack-version-option{display:flex;align-items:center;gap:12px;width:100%;min-height:75px;padding:12px 13px;text-align:left;border:1px solid rgba(180,188,225,.11);border-radius:12px;background:rgba(255,255,255,.025);color:#f4f3ff;cursor:pointer;transition:border-color .16s,background .16s,transform .16s}
+.pack-version-option:hover{border-color:rgba(163,139,255,.48);background:rgba(139,123,255,.075);transform:translateY(-1px)}
+.pack-version-option.selected{border-color:#a58affaa;background:linear-gradient(100deg,rgba(139,123,255,.17),rgba(91,196,216,.055));box-shadow:inset 0 0 0 1px rgba(165,138,255,.12)}
+.pack-version-radio{display:grid;place-items:center;flex:none;width:22px;height:22px;border:1px solid rgba(190,195,220,.25);border-radius:50%;color:#c7b7ff}
+.pack-version-option.selected .pack-version-radio{border-color:#aa96ff;background:rgba(157,132,255,.16)}
+.pack-version-option-main{display:flex;flex:1;min-width:0;flex-direction:column;gap:4px}
+.pack-version-option-main>b{font-size:12px;line-height:1.35;font-weight:700;overflow-wrap:anywhere}
+.pack-version-option-sub{font-size:9px;color:#9ba3ba;overflow-wrap:anywhere}
+.pack-version-chips{display:flex;flex-wrap:wrap;gap:5px;margin-top:3px}
+.pack-version-chips i{padding:3px 6px;border:1px solid rgba(180,188,225,.12);border-radius:5px;background:rgba(255,255,255,.035);color:#aeb7ce;font-size:8px;font-style:normal;line-height:1.2}
+.pack-version-option-date{flex:none;align-self:flex-start;padding-top:3px;color:#8f97ac;font-size:9px;font-variant-numeric:tabular-nums}
+.pack-version-target{margin-bottom:14px}
+.modpack-version-dialog .pack-version-actions{margin-top:17px;padding-top:15px;border-top:1px solid rgba(180,188,225,.1)}
+.modpack-version-dialog .pack-version-actions .primary-btn{min-height:40px;padding:0 17px;font-size:11px}
+@media(max-width:560px){.pack-version-dialog.modpack-version-dialog{padding:18px}.pack-version-option{gap:9px;padding:10px}.pack-version-option-date{display:none}.pack-version-list{max-height:45vh}}
