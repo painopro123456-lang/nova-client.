@@ -384,3 +384,28 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
   .nova-log-time{display:none}
   .nova-log-level{justify-self:start}
 }
+
+/* Expanded, live-readable modpack file and log panels */
+.nova-pack-manager{
+  width:min(1440px,calc(100vw - 24px))!important;
+  max-width:1440px!important;
+  max-height:calc(100dvh - 24px)!important;
+  overflow-y:auto!important;
+  overflow-x:hidden!important;
+}
+.nova-pack-logs,.nova-pack-content,.nova-pack-tab-placeholder{min-width:0;width:100%}
+.nova-pack-logs .nova-log-viewer{
+  width:100%;
+  height:min(64vh,760px);
+  max-height:min(64vh,760px)!important;
+  min-height:320px;
+  overflow:auto;
+  overscroll-behavior:contain;
+  scrollbar-gutter:stable;
+}
+.nova-pack-file-list{width:100%;max-width:100%;overflow-x:auto;overflow-y:visible}
+.nova-pack-file-head,.nova-pack-file-row{grid-template-columns:minmax(0,1fr) 160px 140px}
+.nova-log-message{min-width:0;overflow-wrap:anywhere;white-space:pre-wrap}
+@media(max-width:700px){
+  .nova-pack-logs .nova-log-viewer{height:55vh;max-height:55vh!important;min-height:220px}
+}
