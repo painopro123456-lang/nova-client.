@@ -748,6 +748,33 @@ fn create_instance(instance_name: String, display_name: String, version: String,
 }
 
 #[tauri::command]
+fn list_instances() -> Result<Vec<Value>, String> {
+    let local = std::env::var("LOCALAPPDATA")
+        .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
+    let root = PathBuf::from(local).join("NOVA Client").join("minecraft").join("instances");
+    if !root.exists() { return Ok(Vec::new()); }
+    let entries = std::fs::read_dir(&root)
+        .map_err(|e| format!("Could not scan NOVA instances: {e}"))?;
+    let mut instances = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Could not read an instance folder: {e}"))?;
+        if !entry.file_type().map_err(|e| format!("Could not inspect an instance folder: {e}"))?.is_dir() {
+            continue;
+        }
+        let metadata_path = entry.path().join("nova-instance.json");
+        if !metadata_path.is_file() { continue; }
+        let bytes = std::fs::read(&metadata_path)
+            .map_err(|e| format!("Could not recover instance metadata: {e}"))?;
+        let metadata: Value = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Instance metadata in '{}' is invalid: {e}", entry.file_name().to_string_lossy()))?;
+        if metadata["instanceName"].as_str().is_some() && metadata["minecraftVersion"].as_str().is_some() {
+            instances.push(metadata);
+        }
+    }
+    Ok(instances)
+}
+
+#[tauri::command]
 fn delete_instance(instance_name: String) -> Result<(), String> {
     let name = safe_instance_name(&instance_name)?;
     let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
@@ -776,6 +803,7 @@ fn main() {
             curseforge_modpack_versions,
             install_curseforge_modpack,
             create_instance,
+            list_instances,
             delete_instance
         ])
         .run(tauri::generate_context!())
