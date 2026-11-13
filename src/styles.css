@@ -278,3 +278,50 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .nova-log-row.level-error .nova-log-level,.nova-log-row.level-fatal .nova-log-level{color:#ff8996;background:#e34b6028}
 .nova-log-row.level-error .nova-log-message,.nova-log-row.level-fatal .nova-log-message{color:#ffd1d5}
 .nova-log-empty{padding:18px;text-align:center;color:var(--muted);font-family:Inter,ui-sans-serif,system-ui;font-size:11px}
+
+
+/* Modrinth-inspired installed modpack manager */
+.nova-pack-manager{width:min(980px,calc(100vw - 44px));max-height:calc(100vh - 48px);overflow:auto;padding:22px 24px;background:#17191d;color:#f4f5f7;border:1px solid rgba(255,255,255,.12);border-radius:20px}
+.nova-pack-manager-head{display:flex;align-items:center;justify-content:space-between;gap:18px;padding-bottom:18px;border-bottom:1px solid rgba(255,255,255,.1)}
+.nova-pack-manager-identity{display:flex;align-items:center;gap:16px;min-width:0}
+.nova-pack-manager-icon{width:64px;height:64px;object-fit:cover;border-radius:13px;flex:none;background:#292d34}
+.nova-pack-manager-placeholder{display:grid;place-items:center;color:#aeb8c6}
+.nova-pack-manager-identity h2{font-size:23px;margin:0 0 7px;letter-spacing:-.5px}
+.nova-pack-manager-identity p{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin:0;color:#9da8b6;font-size:13px}
+.nova-pack-manager-identity p span{display:inline-flex;align-items:center;gap:5px}
+.nova-pack-manager-identity p i{width:4px;height:4px;border-radius:50%;background:#647080}
+.nova-pack-manager-actions{display:flex;align-items:center;gap:9px;flex:none}
+.nova-pack-tabs{display:flex;align-items:center;gap:5px;margin:17px 0;padding:5px;width:max-content;max-width:100%;overflow:auto;background:#24272d;border:1px solid rgba(255,255,255,.08);border-radius:30px}
+.nova-pack-tabs button{display:flex;align-items:center;gap:8px;padding:10px 15px;border:0;border-radius:24px;background:transparent;color:#aab4c1;font-weight:650;white-space:nowrap;cursor:pointer}
+.nova-pack-tabs button.active{background:#20543e;color:#42e68d}
+.nova-pack-content{display:grid;gap:22px}
+.nova-pack-summary{display:flex;align-items:center;gap:15px;padding:17px 19px;background:#25282e;border:1px solid rgba(255,255,255,.1);border-radius:15px}
+.nova-pack-summary-icon{width:64px;height:64px;display:grid;place-items:center;overflow:hidden;border-radius:12px;background:#30343c;color:#cbd4df;flex:none}
+.nova-pack-summary-icon img{width:100%;height:100%;object-fit:cover}
+.nova-pack-summary-copy{display:grid;gap:7px;flex:1;min-width:0}
+.nova-pack-summary-copy b{font-size:19px}
+.nova-pack-summary-copy span{display:flex;align-items:center;gap:7px;color:#9ca9b8;font-size:14px}
+.nova-pack-provider{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:0 4px 15px;border-bottom:1px solid rgba(255,255,255,.1);color:#9da8b6;font-size:13px}
+.nova-pack-provider span{display:flex;align-items:center;gap:6px}
+.nova-pack-provider button{display:flex;align-items:center;gap:7px;margin-left:auto;border:0;background:transparent;color:#c4ccd6;font-weight:650;cursor:pointer}
+.nova-pack-section-title{display:flex;align-items:center;justify-content:space-between;gap:15px}
+.nova-pack-section-title h3{margin:0 0 5px;font-size:19px}
+.nova-pack-section-title p{margin:0;color:#98a3b1;font-size:13px}
+.nova-pack-file-list{overflow:hidden;border:1px solid rgba(255,255,255,.1);border-radius:14px;background:#202329}
+.nova-pack-file-head,.nova-pack-file-row{display:grid;grid-template-columns:minmax(0,1fr) 130px 120px;align-items:center;gap:14px;padding:12px 16px}
+.nova-pack-file-head{background:#282c33;color:#aab5c2;font-size:13px;font-weight:700}
+.nova-pack-file-row{min-height:66px;border-top:1px solid rgba(255,255,255,.08)}
+.nova-pack-file-name{display:flex;align-items:center;gap:12px;min-width:0}
+.nova-pack-file-icon{width:46px;height:46px;display:grid;place-items:center;flex:none;border-radius:10px;background:#303945;color:#b9c8d9}
+.nova-pack-file-name>span:last-child{display:grid;gap:4px;min-width:0}
+.nova-pack-file-name b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}
+.nova-pack-file-name small{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#929eac;font-size:12px}
+.nova-pack-file-size{color:#c5ccd5;font-size:13px}
+.nova-pack-file-actions{display:flex;justify-content:flex-end}
+.nova-pack-tab-placeholder{min-height:230px;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;color:#9da8b6;text-align:center}
+.nova-pack-tab-placeholder h3{margin:3px 0;color:#f3f5f7}
+.nova-pack-tab-placeholder p{margin:0 0 8px;font-size:13px}
+.nova-pack-tab-placeholder .nova-pack-file-list{width:100%;text-align:left}
+.nova-pack-logs{display:grid;gap:14px}
+.nova-pack-manager-footer{display:flex;justify-content:space-between;gap:10px;margin-top:22px;padding-top:15px;border-top:1px solid rgba(255,255,255,.1)}
+@media(max-width:700px){.nova-pack-manager{padding:16px}.nova-pack-manager-head{align-items:flex-start;flex-direction:column}.nova-pack-manager-actions{width:100%}.nova-pack-manager-identity h2{font-size:19px}.nova-pack-manager-icon{width:52px;height:52px}.nova-pack-summary{flex-wrap:wrap}.nova-pack-file-head,.nova-pack-file-row{grid-template-columns:minmax(0,1fr) 70px}.nova-pack-file-head span:last-child,.nova-pack-file-actions{display:none}.nova-pack-tabs button{padding:9px 11px}}
