@@ -32,7 +32,7 @@ Only check an item after its code change is committed and the relevant build/tes
 - [x] 23. Show the signed-in account in the profile UI.
 - [x] 24. Provide a working sign-out control.
 - [ ] 25. Replace the settings placeholder with functional settings.
-- [ ] 26. Replace or clearly label the PvP placeholder.
+- [x] 26. Replace or clearly label the PvP placeholder.
 - [x] 27. Keep progress event handling alive while the catalog screen is unmounted.
 
 ## Microsoft authentication and security
@@ -43,12 +43,12 @@ Only check an item after its code change is committed and the relevant build/tes
 - [ ] 32. Serialize token refreshes to avoid concurrent refresh conflicts.
 
 ## NOVA in-game Fabric mod
-- [ ] 33. Implement advertised modules instead of visual-only toggles.
-- [ ] 34. Make category buttons filter the module list.
-- [ ] 35. Add per-module settings.
-- [ ] 36. Persist module enabled states.
+- [x] 33. Implement advertised modules instead of visual-only toggles.
+- [x] 34. Make category buttons filter the module list.
+- [x] 35. Add per-module settings.
+- [x] 36. Persist module enabled states.
 - [ ] 37. Verify Right Shift menu open/close behaviour in Minecraft 26.2.
-- [ ] 38. Add the keybind translation entry.
+- [x] 38. Add the keybind translation entry.
 
 ## Maintenance and validation
 - [x] 39. Update README to match the implemented product.
