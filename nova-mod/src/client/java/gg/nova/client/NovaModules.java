@@ -28,7 +28,7 @@ public final class NovaModules {
 
     public static boolean enabled(String name) {
         String fallback = switch (name) {
-            case "FPS", "Keystrokes", "Coordinates" -> "true";
+            case "FPS", "Keystrokes", "Coordinates", "Armor Status" -> "true";
             default -> "false";
         };
         return Boolean.parseBoolean(SETTINGS.getProperty(name, fallback));
