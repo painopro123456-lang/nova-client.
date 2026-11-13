@@ -821,6 +821,39 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
     Ok(())
 }
 
+
+#[cfg(test)]
+mod tests {
+    use super::{safe_instance_name, safe_relative_path};
+
+    #[test]
+    fn instance_names_strip_unsafe_characters() {
+        assert_eq!(safe_instance_name(" My Pack! 01 ").unwrap(), "MyPack01");
+    }
+
+    #[test]
+    fn instance_names_reject_empty_values() {
+        assert!(safe_instance_name(" !!! ").is_err());
+    }
+
+    #[test]
+    fn instance_names_are_limited_to_48_characters() {
+        let input = "a".repeat(60);
+        assert_eq!(safe_instance_name(&input).unwrap().len(), 48);
+    }
+
+    #[test]
+    fn relative_paths_reject_parent_traversal() {
+        assert!(safe_relative_path("mods/../../outside").is_err());
+        assert!(safe_relative_path("../outside").is_err());
+    }
+
+    #[test]
+    fn relative_paths_accept_normal_mod_paths() {
+        assert!(safe_relative_path("mods/example.jar").is_ok());
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
