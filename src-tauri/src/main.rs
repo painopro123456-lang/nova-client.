@@ -1990,6 +1990,27 @@ fn list_instances() -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
+fn set_instance_icon(instance_name: String, icon_url: String) -> Result<(), String> {
+    let folder = instance_folder(&instance_name)?;
+    let metadata_path = folder.join("nova-instance.json");
+    let bytes = std::fs::read(&metadata_path)
+        .map_err(|e| format!("Could not read modpack metadata: {e}"))?;
+    let mut metadata: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("Modpack metadata is invalid: {e}"))?;
+    let parsed = reqwest::Url::parse(&icon_url)
+        .map_err(|_| "The modpack icon URL is invalid.".to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("Modpack icons must use a secure HTTPS URL.".into());
+    }
+    metadata["iconUrl"] = Value::String(icon_url);
+    let serialized = serde_json::to_vec_pretty(&metadata)
+        .map_err(|e| format!("Could not encode modpack metadata: {e}"))?;
+    std::fs::write(&metadata_path, serialized)
+        .map_err(|e| format!("Could not save modpack icon: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
 fn list_instance_content(instance_name: String) -> Result<Vec<Value>, String> {
     let folder = instance_folder(&instance_name)?;
     let mods_dir = folder.join("mods");
@@ -2170,6 +2191,7 @@ fn main() {
             install_mod_to_instance,
             create_instance,
             list_instances,
+            set_instance_icon,
             list_instance_content,
             delete_instance
         ])
