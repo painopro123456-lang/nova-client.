@@ -1094,6 +1094,40 @@ mod tests {
     }
 
     #[test]
+    fn extracts_valid_modpack_overrides_atomically() {
+        let root=std::env::temp_dir().join(format!("nova-pack-extract-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let archive_path=root.join("pack.zip");
+        let mut archive=zip::ZipWriter::new(File::create(&archive_path).unwrap());
+        archive.start_file("overrides/config/nova-test.txt",zip::write::SimpleFileOptions::default()).unwrap();
+        archive.write_all(b"verified").unwrap();
+        archive.finish().unwrap();
+        let destination=root.join("instance");
+        std::fs::create_dir_all(&destination).unwrap();
+        extract_pack_overrides(&archive_path,"overrides/",&destination,"test").unwrap();
+        assert_eq!(std::fs::read_to_string(destination.join("config/nova-test.txt")).unwrap(),"verified");
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn rejects_zip_slip_paths_in_modpack_overrides() {
+        let root=std::env::temp_dir().join(format!("nova-pack-slip-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(&root).unwrap();
+        let archive_path=root.join("pack.zip");
+        let mut archive=zip::ZipWriter::new(File::create(&archive_path).unwrap());
+        archive.start_file("overrides/../../outside.txt",zip::write::SimpleFileOptions::default()).unwrap();
+        archive.write_all(b"blocked").unwrap();
+        archive.finish().unwrap();
+        let destination=root.join("instance");
+        std::fs::create_dir_all(&destination).unwrap();
+        assert!(extract_pack_overrides(&archive_path,"overrides/",&destination,"test").is_err());
+        assert!(!root.join("outside.txt").exists());
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn install_marker_is_exclusive_and_released() {
         let folder=std::env::temp_dir().join(format!("nova-install-lock-test-{}",std::process::id()));
         let _=std::fs::remove_dir_all(&folder);
