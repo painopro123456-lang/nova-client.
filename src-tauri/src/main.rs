@@ -797,8 +797,10 @@ fn list_instances() -> Result<Vec<Value>, String> {
         };
         let Some(name) = metadata["instanceName"].as_str() else { continue; };
         let Some(version) = metadata["minecraftVersion"].as_str() else { continue; };
-        if safe_instance_name(name).is_ok()
-            && name == entry.file_name().to_string_lossy()
+        let Ok(safe_name) = safe_instance_name(name) else { continue; };
+        let folder_name = entry.file_name();
+        if safe_name == name
+            && folder_name.to_string_lossy().as_ref() == name
             && !version.trim().is_empty()
         {
             instances.push(metadata);
