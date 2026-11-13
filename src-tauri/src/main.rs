@@ -33,7 +33,7 @@ static AUTH_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new
 fn process_is_running(pid:u32)->bool{
     let filter=format!("PID eq {pid}");
     match Command::new("tasklist").args(["/FI",filter.as_str(),"/NH"]).output(){
-        Ok(output)=>String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()),
+        Ok(output)=>{let expected=pid.to_string();String::from_utf8_lossy(&output.stdout).lines().any(|line|line.split_whitespace().nth(1)==Some(expected.as_str()))},
         Err(_)=>true
     }
 }
@@ -480,6 +480,14 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
 
     let process_key=instance_name.as_deref().map(safe_instance_name).transpose()?.unwrap_or_else(||format!("default-{version}"));
     let running_marker=instance_name.as_deref().map(|name|instance_folder(name).map(|folder|folder.join(".nova-running.pid"))).transpose()?;
+    if let Some(marker)=&running_marker {
+        if let Ok(contents)=std::fs::read_to_string(marker) {
+            if let Ok(pid)=contents.trim().parse::<u32>() {
+                if process_is_running(pid){return Err("This Minecraft instance is already running.".into());}
+            }
+            let _=std::fs::remove_file(marker);
+        }
+    }
     let mut options = LaunchOptions::new(game_root, version);
     if let Some(name) = instance_name.as_deref() {
         options.instance = Some(safe_instance_name(name)?);
