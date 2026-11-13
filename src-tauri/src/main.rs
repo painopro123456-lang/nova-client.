@@ -132,8 +132,10 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
 
     app.emit("nova-login-link", login_url.clone())
         .map_err(|e| format!("Could not show the Microsoft sign-in link: {e}"))?;
-    webbrowser::open(&login_url)
-        .map_err(|e| format!("Could not open the Microsoft sign-in page: {e}"))?;
+    // Browser launch can be blocked by Windows policy or a custom browser handler.
+    // The frontend already received the URL, so keep the callback listener alive and
+    // let the user open the displayed link manually instead of aborting sign-in.
+    let _ = webbrowser::open(&login_url);
 
     let redirect_url = tokio::task::spawn_blocking(move || -> Result<String, String> {
         listener.set_nonblocking(true)
