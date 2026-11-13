@@ -890,7 +890,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         format!("default-{version}")
     };
     // Reserve before reading metadata so delete/install cannot race the launch setup.
-    let reservation = InstanceReservation::acquire(launch_key)?;
+    let reservation = InstanceReservation::acquire(launch_key.clone())?;
     let mut loader = loader.unwrap_or_else(|| "vanilla".to_owned());
     let mut loader_build = loader_build.unwrap_or_else(|| "latest".to_owned());
     if let Some(instance) = instance_name.as_deref() {
