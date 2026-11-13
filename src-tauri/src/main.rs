@@ -269,6 +269,74 @@ async fn minecraft_versions() -> Result<Value, String> {
 }
 
 #[tauri::command]
+async fn install_mod_file(app:tauri::AppHandle,provider:String,project_id:String,instance_name:String)->Result<Value,String>{
+    let name=safe_instance_name(&instance_name)?;
+    let _install_guard=InstallGuard::acquire(name.clone())?;
+    let folder=instance_folder(&name)?;
+    let metadata_path=folder.join("nova-instance.json");
+    let metadata:Value=serde_json::from_slice(&std::fs::read(&metadata_path).map_err(|_|"Choose an installed Minecraft instance before installing a mod.".to_string())?)
+        .map_err(|e|format!("Could not read this instance's settings: {e}"))?;
+    let minecraft_version=metadata["minecraftVersion"].as_str().or(metadata["version"].as_str())
+        .ok_or("This instance has no Minecraft version in its metadata.")?;
+    let loader=metadata["loader"].as_str().unwrap_or("vanilla").to_ascii_lowercase();
+    if loader=="vanilla"{return Err("Standalone mods require a Fabric, Forge, NeoForge or Quilt instance.".into());}
+    let client=http_client()?;
+    let (url,filename,size,sha1)=match provider.to_ascii_lowercase().as_str(){
+        "modrinth"=>{
+            let modrinth_loader=if loader=="legacyfabric"{"legacy-fabric"}else{loader.as_str()};
+            let versions:Value=client.get(format!("https://api.modrinth.com/v2/project/{project_id}/version"))
+                .query(&[("game_versions",format!("[\"{minecraft_version}\"]")),("loaders",format!("[\"{modrinth_loader}\"]"))])
+                .send().await.map_err(|e|format!("Could not reach Modrinth: {e}"))?
+                .error_for_status().map_err(|e|format!("Modrinth could not list compatible mod versions: {e}"))?
+                .json().await.map_err(|e|format!("Modrinth returned an unreadable version list: {e}"))?;
+            let version=versions.as_array().and_then(|list|list.first()).ok_or("No compatible Modrinth release was found for this Minecraft version and loader.")?;
+            let file=version["files"].as_array().and_then(|files|files.iter().find(|f|f["primary"].as_bool()==Some(true)).or_else(||files.first()))
+                .ok_or("Modrinth did not provide a downloadable JAR for this release.")?;
+            (
+                file["url"].as_str().ok_or("Modrinth download URL is missing.")?.to_owned(),
+                file["filename"].as_str().ok_or("Modrinth file name is missing.")?.to_owned(),
+                file["size"].as_u64(),
+                file["hashes"]["sha1"].as_str().map(str::to_owned)
+            )
+        },
+        "curseforge"=>{
+            let api_key=curseforge_api_key()?;
+            let mut headers=HeaderMap::new();
+            headers.insert("x-api-key",HeaderValue::from_str(&api_key).map_err(|_|"The CurseForge API credential is invalid.")?);
+            headers.insert(ACCEPT,HeaderValue::from_static("application/json"));
+            let loader_code=match loader.as_str(){"forge"=>1u32,"fabric"=>4,"quilt"=>5,"neoforge"=>6,_=>return Err("This mod loader is not supported by CurseForge's version filter.".into())};
+            let files:Value=client.get(format!("{CURSEFORGE_API}/mods/{project_id}/files"))
+                .headers(headers.clone()).query(&[("gameVersion",minecraft_version)])
+                .query(&[("modLoaderType",loader_code)]).query(&[("pageSize",1u32)]).query(&[("index",0u32)])
+                .send().await.map_err(|e|format!("Could not reach CurseForge: {e}"))?
+                .error_for_status().map_err(|e|format!("CurseForge could not list compatible mod versions: {e}"))?
+                .json().await.map_err(|e|format!("CurseForge returned an unreadable version list: {e}"))?;
+            let file=files["data"].as_array().and_then(|list|list.first()).ok_or("No compatible CurseForge release was found for this Minecraft version and loader.")?;
+            let file_id=file["id"].as_u64().ok_or("CurseForge file ID is missing.")?;
+            let url:String=client.get(format!("{CURSEFORGE_API}/mods/{project_id}/files/{file_id}/download-url"))
+                .headers(headers).send().await.map_err(|e|format!("Could not resolve the CurseForge download URL: {e}"))?
+                .error_for_status().map_err(|e|format!("CurseForge did not provide a download URL: {e}"))?
+                .json::<Value>().await.map_err(|e|format!("CurseForge download response was unreadable: {e}"))?["data"]
+                .as_str().ok_or("CurseForge did not provide a direct mod download URL.")?.to_owned();
+            let sha1=file["hashes"].as_array().and_then(|hashes|hashes.iter().find(|h|h["algo"].as_u64()==Some(1))).and_then(|h|h["value"].as_str()).map(str::to_owned);
+            (url,file["fileName"].as_str().unwrap_or("mod.jar").to_owned(),file["fileLength"].as_u64(),sha1)
+        },
+        _=>return Err("Choose Modrinth or CurseForge as the mod provider.".into())
+    };
+    let safe_name=Path::new(&filename).file_name().and_then(|value|value.to_str()).ok_or("The provider returned an invalid mod file name.")?;
+    let relative=safe_relative_path(safe_name)?;
+    if relative.components().count()!=1||!safe_name.to_ascii_lowercase().ends_with(".jar"){
+        return Err("The provider returned a file that is not a safe JAR filename.".into());
+    }
+    ensure_free_space(&folder,size.unwrap_or(0).saturating_add(128*1024*1024))?;
+    let mods_folder=folder.join("mods");
+    std::fs::create_dir_all(&mods_folder).map_err(|e|format!("Could not create the instance mods folder: {e}"))?;
+    let destination=mods_folder.join(relative);
+    download_pack_file(&app,&name,&url,&destination,size,sha1.as_deref(),&format!("Installing {safe_name}")).await?;
+    Ok(json!({"instanceName":name,"projectId":project_id,"provider":provider,"fileName":safe_name}))
+}
+
+#[tauri::command]
 async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String, memory_max: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let _install_guard=InstallGuard::acquire(name.clone())?;
@@ -887,6 +955,7 @@ fn main() {
             create_instance,
             list_instances,
             cancel_modpack_install,
+            install_mod_file,
             delete_instance
         ])
         .run(tauri::generate_context!())
