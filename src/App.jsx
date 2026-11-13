@@ -58,7 +58,7 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versi
 }
 
 
-function Catalog({ packs }) {
+function Catalog({ packs, active }) {
   const [q,setQ]=useState("");
   const [provider,setProvider]=useState("modrinth");
   const [hits,setHits]=useState([]);
@@ -76,6 +76,7 @@ function Catalog({ packs }) {
   const [installDialog,setInstallDialog]=useState(null);
 
   useEffect(()=>{
+    if(!active) return;
     const ctrl=new AbortController();
     const timer=setTimeout(async()=>{
       setBusy(true); setError(""); setHits([]);
@@ -99,7 +100,7 @@ function Catalog({ packs }) {
       finally { if(!ctrl.signal.aborted) setBusy(false); }
     },250);
     return ()=>{clearTimeout(timer);ctrl.abort();};
-  },[q,packs,provider,page]);
+  },[q,packs,provider,page,active]);
 
   useEffect(()=>{try{localStorage.setItem("nova.installedPacks",JSON.stringify(installed))}catch(e){setPackActionMessage("Could not save installed modpack list: "+(e.message||e))}},[installed]);
   useEffect(()=>{
@@ -342,5 +343,5 @@ export default function App() {
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances versions={versions}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" && <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/>}<div style={{display:page==="mods"?"block":"none"}}><Catalog packs={false} active={page==="mods"}/></div><div style={{display:page==="modpacks"?"block":"none"}}><Catalog packs={true} active={page==="modpacks"}/></div>{page === "instances" && <LocalInstances versions={versions}/>}{!["home","mods","modpacks","instances"].includes(page) && <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
