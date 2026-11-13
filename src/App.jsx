@@ -48,7 +48,7 @@ function Topbar({ title, subtitle }) {
   </header>;
 }
 
-function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versionsLoading, loaderType, setLoaderType, launching, onLaunch, onLogin, signedIn, accountName, loginBusy, loginUrl, message }) {
+function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versionsLoading, loaderType, setLoaderType, memoryMax, launching, onLaunch, onLogin, signedIn, accountName, loginBusy, loginUrl, message }) {
   return <>
     <div className="hero-panel">
       <div className="hero-glow"/>
@@ -63,7 +63,7 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versi
 }
 
 
-function Catalog({ packs }) {
+function Catalog({ packs, memoryMax }) {
   const [q,setQ]=useState("");
   const [provider,setProvider]=useState("modrinth");
   const [hits,setHits]=useState([]);
@@ -159,7 +159,7 @@ function Catalog({ packs }) {
         : await invoke("install_curseforge_modpack",{modId:projectId,instanceName,fileId:Number(selectedPackVersion)});
       const preparingProgress={name:metadata.name||project.title,step:1,progress:null,status:"Preparing Minecraft",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""};
       setInstallDialog(preparingProgress); writeStored("nova.activeInstall",preparingProgress);
-      await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName});
+      await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName,memoryMax});
       // Only expose a pack as installed after Minecraft and its loader are ready.
       // Remove the previous isolated install only after the replacement is ready.
       const previous=installed[storageKey];
@@ -180,7 +180,7 @@ function Catalog({ packs }) {
   const launchPack=async metadata=>{
     setInstallingId(String(metadata.projectId));setPackActionMessage(`Preparing ${metadata.name}…`);
     try{
-      await invoke("launch_minecraft",{version:metadata.minecraftVersion,loader:metadata.loader,loaderBuild:metadata.loaderVersion,instanceName:metadata.instanceName});
+      await invoke("launch_minecraft",{version:metadata.minecraftVersion,loader:metadata.loader,loaderBuild:metadata.loaderVersion,instanceName:metadata.instanceName,memoryMax});
       setPackActionMessage(`${metadata.name} has been started.`);
     }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Could not launch this modpack."));}
     finally{setInstallingId("");}
@@ -248,7 +248,7 @@ function Catalog({ packs }) {
     <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||!hasNext} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
   </section>;
 }
-function LocalInstances({ versions }) {
+function LocalInstances({ versions, memoryMax }) {
   const [items,setItems]=useState(()=>readStored("nova.instances",[],Array.isArray));
   const [packs,setPacks]=useState(()=>readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v)));
   const [name,setName]=useState("");
@@ -259,13 +259,27 @@ function LocalInstances({ versions }) {
   useEffect(()=>{writeStored("nova.instances",items)},[items]);
   useEffect(()=>{const recover=()=>{setItems(readStored("nova.instances",[],Array.isArray));setPacks(readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v)));};window.addEventListener("nova-instances-recovered",recover);return()=>window.removeEventListener("nova-instances-recovered",recover);},[]);
   const add=async()=>{if(!name.trim()||!version)return;const instanceName=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);setAction("Creating instance "+name.trim()+"…");try{const metadata=await invoke("create_instance",{instanceName,displayName:name.trim(),version,loader});setItems(a=>[...a,{id:Date.now(),...metadata}]);setName("");setAction((metadata.name||name.trim())+" created. Press Install & Play to install Minecraft and its loader.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not create this instance."));}};
-  const playPack=async pack=>{setAction("Installing Minecraft and loader for "+pack.name+" (if needed), then launching…");try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName});setAction(pack.name+" started.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}};
+  const playPack=async pack=>{setAction("Installing Minecraft and loader for "+pack.name+" (if needed), then launching…");try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName,memoryMax});setAction(pack.name+" started.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}};
   const removePack=async(id,pack)=>{setAction("Deleting "+pack.name+"…");try{await invoke("delete_instance",{instanceName:pack.instanceName});setItems(old=>old.filter(x=>x.id!==id));setPacks(old=>{const next={...old};delete next[id];writeStored("nova.installedPacks",next);return next;});setAction(pack.name+" deleted.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not delete this instance."));}};
   const installedPacks=Object.entries(packs);
   return <section className="local-instances"><div className="eyebrow">LOCAL PROFILES</div><h2>Your instances</h2><p>Each modpack gets its own isolated folder. NOVA installs the pack files, Minecraft, Java and the matching loader before marking the instance ready.</p>
     {installedPacks.length>0&&<><div className="section-heading"><div><div className="eyebrow">INSTALLED MODPACKS</div><h2>Your library</h2></div></div>{installedPacks.map(([id,pack])=><div className="instance-entry" key={id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{pack.name}</b><span>Minecraft {pack.minecraftVersion} · {pack.loader}{pack.loaderVersion?" "+pack.loaderVersion:""} · {pack.source}</span></div><button className="primary-btn" onClick={()=>playPack(pack)}><Play size={13} fill="currentColor"/> Play</button><button className="delete-entry" onClick={()=>removePack(id,pack)}>Delete</button></div>)}</>}
     <div className="section-heading"><div><div className="eyebrow">CUSTOM PROFILES</div><h2>Organize versions</h2></div></div><div className="instance-create"><input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Instance name"/><select value={version} onChange={e=>setVersion(e.target.value)} disabled={!version||versions.length===0}>{versions.map(v=><option key={v.id} value={v.id}>{v.id}{v.type==="snapshot"?" · Snapshot":""}</option>)}</select><select value={loader} onChange={e=>setLoader(e.target.value)}><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="quilt">Quilt</option><option value="vanilla">Vanilla</option></select><button className="primary-btn" onClick={add} disabled={!name.trim()||!version}><Plus size={14}/> Create instance</button></div>{items.length===0?<div className="catalog-note">No custom profiles yet.</div>:items.map(x=><div className="instance-entry" key={x.id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{x.name}</b><span>Minecraft {x.minecraftVersion||x.version} · {x.loader||"vanilla"} · isolated instance</span></div><button className="primary-btn" onClick={()=>playPack(x)}>Install & Play</button><button className="delete-entry" onClick={()=>removePack(x.id,x)}>Delete</button></div>)}
     {action&&<div className="catalog-note">{action}</div>}
+  </section>;
+}
+
+function SettingsPage({memoryMax,setMemoryMax}) {
+  return <section className="local-instances">
+    <div className="eyebrow">NOVA PREFERENCES</div><h2>Performance settings</h2>
+    <p>Choose the maximum memory available to Minecraft. Start with 4 GB; increase it only when your PC has enough free memory.</p>
+    <div className="instance-create">
+      <label htmlFor="nova-memory">GAME MEMORY</label>
+      <select id="nova-memory" value={memoryMax} onChange={e=>setMemoryMax(e.target.value)}>
+        {["2G","3G","4G","6G","8G","12G","16G"].map(v=><option key={v} value={v}>{v.replace("G"," GB")}</option>)}
+      </select>
+    </div>
+    <div className="catalog-note">The selected limit is applied to new launches and modpack preparation. It does not reserve memory while Minecraft is closed.</div>
   </section>;
 }
 
@@ -287,6 +301,8 @@ export default function App() {
   const [versions, setVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(true);
   const [loaderType, setLoaderType] = useState("vanilla");
+  const [memoryMax,setMemoryMax]=useState(()=>readStored("nova.memoryMax","4G",v=>["2G","3G","4G","6G","8G","12G","16G"].includes(v)));
+  useEffect(()=>{writeStored("nova.memoryMax",memoryMax);},[memoryMax]);
   const [launching, setLaunching] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [accountName, setAccountName] = useState("");
@@ -332,11 +348,11 @@ export default function App() {
     if (typeof selectedVersion !== "string" || !selectedVersion.trim() || selectedVersion === "null" || selectedVersion === "undefined") { setMessage("No Minecraft version is selected. Wait for the version list, then choose a version."); return; }
     if (versionsLoading) { setMessage("Minecraft versions are still loading. Try again in a moment."); return; }
     setLaunching(true); setMessage(`Preparing Minecraft ${selectedVersion} (${loaderType}). The first launch downloads game files and Java runtime.`);
-    try { await invoke("launch_minecraft", { version: selectedVersion, loader: loaderType }); setMessage("Minecraft has been started. Keep NOVA open while the game loads."); }
+    try { await invoke("launch_minecraft", { version: selectedVersion, loader: loaderType, memoryMax }); setMessage("Minecraft has been started. Keep NOVA open while the game loads."); }
     catch (error) { setMessage(typeof error === "string" ? error : (error.message || "Minecraft could not be started.")); }
     finally { setLaunching(false); }
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/>{gameExit&&<div className="catalog-note" role="status">{gameExit}<button className="text-button" onClick={()=>setGameExit("")}>Dismiss</button></div>}<div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances versions={versions}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/>{gameExit&&<div className="catalog-note" role="status">{gameExit}<button className="text-button" onClick={()=>setGameExit("")}>Dismiss</button></div>}<div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} memoryMax={memoryMax} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false} memoryMax={memoryMax}/> : page === "modpacks" ? <Catalog packs={true} memoryMax={memoryMax}/> : page === "instances" ? <LocalInstances versions={versions} memoryMax={memoryMax}/> : page === "settings" ? <SettingsPage memoryMax={memoryMax} setMemoryMax={setMemoryMax}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
