@@ -423,6 +423,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String, 
     credential_entry(MINECRAFT_ACCOUNT_USER)?
         .set_password(&refreshed_json)
         .map_err(|e| format!("Could not update the secure account store: {e}"))?;
+    drop(_refresh_guard);
 
     let local_app_data = std::env::var("LOCALAPPDATA")
         .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
