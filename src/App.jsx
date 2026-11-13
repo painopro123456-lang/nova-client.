@@ -72,6 +72,7 @@ function Catalog({ packs }) {
   const [packVersions,setPackVersions]=useState([]);
   const [packVersionsBusy,setPackVersionsBusy]=useState(false);
   const [selectedPackVersion,setSelectedPackVersion]=useState("");
+  const [installDialog,setInstallDialog]=useState(null);
 
   useEffect(()=>{
     const ctrl=new AbortController();
@@ -120,24 +121,24 @@ function Catalog({ packs }) {
     if(!versionProject||!selectedPackVersion)return;
     const project=versionProject,key=String(project.id);
     const instanceName=(project.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,32)||"modpack")+"-"+Date.now().toString().slice(-6);
-    setInstallingId(key);setVersionProject(null);setPackActionMessage("Installing "+project.title+"… This may download a large number of files.");
+    setInstallingId(key);
+    setVersionProject(null);
+    setInstallDialog({name:project.title,step:0,progress:8,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""});
     try{
+      setInstallDialog({name:project.title,step:0,progress:12,status:"Downloading modpack",detail:"Getting the selected release and its manifest…",done:false,error:""});
       const metadata=provider==="modrinth"
         ? await invoke("install_modrinth_modpack",{projectId:key,instanceName,versionId:selectedPackVersion})
         : await invoke("install_curseforge_modpack",{modId:key,instanceName,fileId:Number(selectedPackVersion)});
-      // Keep the downloaded pack visible even if the base-game setup needs a retry.
       setInstalled(old=>({...old,[key]:metadata}));
-      setPackActionMessage("Mod files downloaded. Now installing Minecraft, Java and "+metadata.loader+" for "+(metadata.name||project.title)+"…");
-      try{
-        const ready=await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName});
-        if(!ready?.ready)throw new Error("NOVA did not confirm that the instance is ready.");
-        setPackActionMessage((metadata.name||project.title)+" is fully installed · Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+". Ready to play.");
-      }catch(prepareError){
-        const reason=typeof prepareError==="string"?prepareError:(prepareError.message||"Minecraft setup failed.");
-        setPackActionMessage((metadata.name||project.title)+" mod files are saved, but Minecraft setup did not finish: "+reason+" You can retry with Install & Play.");
-      }
-    }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Modpack installation failed."));}
-    finally{setInstallingId("");}
+      setInstallDialog({name:metadata.name||project.title,step:1,progress:48,status:"Mod files downloaded",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""});
+      await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName});
+      setInstallDialog({name:metadata.name||project.title,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""});
+      setPackActionMessage((metadata.name||project.title)+" is fully installed and ready to play.");
+    }catch(e){
+      const reason=typeof e==="string"?e:(e.message||"Modpack installation failed.");
+      setInstallDialog(current=>({...current,done:true,error:reason,status:"Installation failed",detail:"Your downloaded pack files are kept if they were already saved."}));
+      setPackActionMessage((project.title)+" installation failed: "+reason);
+    }finally{setInstallingId("");}
   };
   const launchPack=async metadata=>{
     setInstallingId(String(metadata.projectId));setPackActionMessage(`Preparing ${metadata.name}…`);
@@ -182,6 +183,24 @@ function Catalog({ packs }) {
         ? <button className="primary-btn" onClick={()=>launchPack(installed[String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Install & Play"}</button>
         : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
     </article>)}</div>}
+    {installDialog&&<div className="pack-version-backdrop install-progress-backdrop" role="presentation">
+      <section className="pack-version-dialog install-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="install-progress-title">
+        <div className="eyebrow">NOVA / MODPACK INSTALLER</div>
+        <h3 id="install-progress-title">{installDialog.done?(installDialog.error?"Installation stopped":"You're all set"):"Installing your modpack"}</h3>
+        <p className="install-progress-name">{installDialog.name}</p>
+        <div className="install-progress-track"><div className={"install-progress-fill"+(!installDialog.done?" is-active":"")} style={{width:installDialog.progress+"%"}}/></div>
+        <div className="install-progress-percent">{installDialog.progress}%</div>
+        <div className="install-progress-status"><span className={installDialog.done?(installDialog.error?"progress-failed":"progress-complete"):"progress-running"}>{installDialog.done?(installDialog.error?"!":"✓"):""}</span><b>{installDialog.status}</b></div>
+        <p className="install-progress-detail">{installDialog.detail}</p>
+        <div className="install-progress-steps">
+          <div className={installDialog.step>=0?"complete":""}><span>1</span><label>Modpack files</label></div>
+          <div className={installDialog.step>=1?"complete":""}><span>2</span><label>Minecraft & Java</label></div>
+          <div className={installDialog.step>=2?"complete":""}><span>3</span><label>Ready to play</label></div>
+        </div>
+        {installDialog.error&&<div className="install-progress-error">{installDialog.error}</div>}
+        {installDialog.done&&<div className="pack-version-actions"><button className="primary-btn" onClick={()=>setInstallDialog(null)}>Close</button></div>}
+      </section>
+    </div>}
     {versionProject&&<div className="pack-version-backdrop" role="presentation" onClick={()=>!packVersionsBusy&&setVersionProject(null)}>
       <section className="pack-version-dialog" role="dialog" aria-modal="true" aria-labelledby="pack-version-title" onClick={e=>e.stopPropagation()}>
         <div className="eyebrow">MODPACK INSTALLER</div><h3 id="pack-version-title">Choose a version</h3><p>Select the exact modpack release you want NOVA to install. The Minecraft version and mod loader are included in each option.</p>
