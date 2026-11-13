@@ -38,7 +38,7 @@ fn process_is_running(pid:u32)->bool{
     }
 }
 #[cfg(not(windows))]
-fn process_is_running(_pid:u32)->bool{false}
+fn process_is_running(pid:u32)->bool{pid==std::process::id()}
 
 fn active_instances() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTANCES.get_or_init(|| Mutex::new(HashSet::new())) }
 fn active_installs() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTALLS.get_or_init(|| Mutex::new(HashSet::new())) }
@@ -1091,6 +1091,17 @@ mod tests {
         assert!(safe_relative_path("mods/example.jar").is_ok());
         assert!(safe_relative_path("../outside.jar").is_err());
         assert!(safe_relative_path("C:/outside.jar").is_err());
+    }
+
+    #[test]
+    fn install_marker_is_exclusive_and_released() {
+        let folder=std::env::temp_dir().join(format!("nova-install-lock-test-{}",std::process::id()));
+        let _=std::fs::remove_dir_all(&folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        claim_install_marker(&folder).unwrap();
+        assert!(claim_install_marker(&folder).is_err());
+        assert_eq!(std::fs::read_to_string(folder.join(".nova-installing")).unwrap(),std::process::id().to_string());
+        std::fs::remove_dir_all(folder).unwrap();
     }
 
     #[test]
