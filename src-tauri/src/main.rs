@@ -45,6 +45,29 @@ fn game_log(message: &str) {
     }
 }
 
+fn reset_log_file(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Could not prepare log folder {}: {e}", parent.display()))?;
+    }
+    std::fs::write(path, "")
+        .map_err(|e| format!("Could not reset log file {}: {e}", path.display()))
+}
+
+fn reset_logs_for_launch(game_root: &Path, instance_name: Option<&str>) -> Result<(), String> {
+    // Start a fresh launcher session log for every game launch.
+    reset_log_file(&game_log_path())?;
+
+    // Clear only the active profile's latest log (and the shared fallback log
+    // used by older launcher-core layouts). Mods, worlds, and saves are untouched.
+    if let Some(name) = instance_name {
+        let safe_name = safe_instance_name(name)?;
+        reset_log_file(&game_root.join("instances").join(safe_name).join("logs").join("latest.log"))?;
+    }
+    reset_log_file(&game_root.join("logs").join("latest.log"))?;
+    Ok(())
+}
+
 fn tail_file(path: &Path, max_lines: usize) -> String {
     match std::fs::read_to_string(path) {
         Ok(contents) => {
@@ -888,6 +911,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         options.loader.build = loader_build;
         options.loader.enable = true;
     }
+    reset_logs_for_launch(&game_root, instance_name.as_deref())?;
     let requested_memory_mb = memory_mb.unwrap_or(2048);
     if !(1024..=16384).contains(&requested_memory_mb) {
         return Err("Memory allocation must be between 1024 MB and 16384 MB.".into());
