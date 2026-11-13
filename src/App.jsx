@@ -8,7 +8,7 @@ import {
   ChevronDown, CircleHelp, Compass, Cpu, Gamepad2, Gauge, HardDrive,
   Layers3, LayoutDashboard, Monitor, Moon, MoreHorizontal, Play, Plus,
   Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Users, Package, ScrollText,
-  WandSparkles, Wifi, X
+  WandSparkles, Wifi, X, Folder, Globe, Share2, Eye, Wrench, RefreshCw, FileText, Clock, Trash2
 } from "lucide-react";
 
 const navGroups = [
@@ -343,27 +343,40 @@ function LocalInstances({ versions, memoryMb, setPage }) {
     {items.length>0&&<><div className="section-heading"><div><div className="eyebrow">LOCAL PROFILES</div><h2>Custom instances</h2></div><span className="instance-count">{items.length} INSTANCE{items.length===1?"":"S"}</span></div><div className="instance-grid">{items.map(item=><article key={item.instanceName||item.id} className="instance-card"><div className="instance-card-art"><Box size={30}/></div><div className="instance-card-copy"><div className="instance-card-kicker">CUSTOM INSTANCE</div><b>{item.name||item.instanceName}</b><span>Minecraft {item.minecraftVersion||item.version} · {item.loader||"vanilla"}</span></div><div className="instance-card-actions"><button className="primary-btn" onClick={()=>playCustom(item)}><Play size={13} fill="currentColor"/> Launch</button><button className="secondary-btn" onClick={()=>removeCustom(item)}><X size={13}/> Delete</button></div></article>)}</div></>}
     {installedPacks.length===0&&items.length===0&&!action&&<div className="catalog-note">No instances installed yet. Use Custom instance to create a profile, or install a modpack from Modpacks.</div>}
     {action&&<div className="catalog-note">{action}</div>}
-    {selectedInstance&&<div className="custom-instance-backdrop" role="presentation" onClick={()=>setSelectedInstance(null)}><section className="custom-instance-dialog" role="dialog" aria-modal="true" aria-labelledby="selected-instance-title" onClick={e=>e.stopPropagation()} style={{maxWidth:820}}>
-      <div className="custom-dialog-top"><div><div className="eyebrow">INSTALLED MODPACK · {selectedInstance.source}</div><h2 id="selected-instance-title">{selectedInstance.name}</h2><p>Minecraft {selectedInstance.minecraftVersion} · {selectedInstance.loader}{selectedInstance.loaderVersion?" "+selectedInstance.loaderVersion:""}</p></div><button className="icon-btn" onClick={()=>setSelectedInstance(null)} aria-label="Close"><X size={17}/></button></div>
-      <div className="instance-detail-art" style={{display:"flex",alignItems:"center",gap:18,padding:"18px 0"}}>{selectedInstance.iconUrl?<img src={selectedInstance.iconUrl} alt="" style={{width:92,height:92,objectFit:"cover",borderRadius:16}}/>:<div className="instance-card-art"><Box size={32}/></div>}<div><div className="eyebrow">YOUR LIBRARY</div><b>{selectedInstance.name}</b><p style={{margin:"6px 0 0",opacity:.72}}>Your own isolated modpack profile.</p></div></div>
-      <div className="instance-card-actions" style={{justifyContent:"flex-start",flexWrap:"wrap",gap:10,margin:"18px 0"}}>
-        <button className="primary-btn" onClick={()=>playPack(selectedInstance)}><Play size={14} fill="currentColor"/> Launch</button>
-        <button className="secondary-btn" onClick={()=>{try{localStorage.setItem("nova.modsTargetInstance",selectedInstance.instanceName)}catch{}setSelectedInstance(null);setPage("mods");}}><Blocks size={14}/> Add mods</button>
-        <button className="secondary-btn" onClick={()=>removePack(selectedInstance.source+":"+String(selectedInstance.projectId),selectedInstance)}><X size={14}/> Delete pack</button>
+    {selectedInstance&&<div className="custom-instance-backdrop" role="presentation" onClick={()=>setSelectedInstance(null)}><section className="custom-instance-dialog nova-pack-manager" role="dialog" aria-modal="true" aria-labelledby="selected-instance-title" onClick={e=>e.stopPropagation()} style={{maxWidth:980}}>
+      <div className="nova-pack-manager-head">
+        <div className="nova-pack-manager-identity">
+          {selectedInstance.iconUrl?<img src={selectedInstance.iconUrl} alt="" className="nova-pack-manager-icon"/>:<div className="nova-pack-manager-icon nova-pack-manager-placeholder"><Box size={30}/></div>}
+          <div><h2 id="selected-instance-title">{selectedInstance.name}</h2><p><span><Package size={13}/> {selectedInstance.loader||"Minecraft"}</span><i/> {selectedInstance.minecraftVersion} <i/> <span><Clock size={13}/> Installed modpack</span></p></div>
+        </div>
+        <div className="nova-pack-manager-actions">
+          <button className="primary-btn" onClick={()=>playPack(selectedInstance)}><Play size={15} fill="currentColor"/> Play</button>
+          <button className="icon-btn" title="Modpack settings" onClick={()=>setAction("Modpack settings are coming soon.")}><Settings size={17}/></button>
+          <button className="icon-btn" title="Close" onClick={()=>setSelectedInstance(null)}><X size={17}/></button>
+        </div>
       </div>
-      <div className="custom-version-filters" style={{marginBottom:14}}>
-        <button className={selectedInstanceTab==="content"?"selected":""} onClick={()=>{setSelectedInstanceTab("content");openInstancePanel(selectedInstance,"content");}}><Package size={14}/> Content</button>
-        <button className={selectedInstanceTab==="logs"?"selected":""} onClick={()=>{setSelectedInstanceTab("logs");openInstancePanel(selectedInstance,"logs");}}><ScrollText size={14}/> Logs</button>
+      <div className="nova-pack-tabs">
+        {[[ "content","Content",Package],["files","Files",Folder],["worlds","Worlds",Globe],["logs","Logs",ScrollText],["share","Share",Users]].map(([id,label,Icon])=><button key={id} className={selectedInstanceTab===id?"active":""} onClick={()=>{setSelectedInstanceTab(id);if(id==="content"||id==="files"||id==="logs")openInstancePanel(selectedInstance,id==="logs"?"logs":"content");}}><Icon size={16}/>{label}</button>)}
       </div>
-      {instancePanel?.instance?.instanceName===selectedInstance.instanceName&&instancePanel.tab===selectedInstanceTab?
-        (instancePanel.loading?<div className="catalog-note">Loading {selectedInstanceTab==="content"?"modpack content":"Minecraft logs"}…</div>:
-        instancePanel.error?<div className="catalog-note error">{instancePanel.error}</div>:
-        selectedInstanceTab==="content"?<div style={{maxHeight:440,overflowY:"auto",display:"grid",gap:8}}>
-          <div className="feature-status">{instancePanel.content.length} MOD FILE{instancePanel.content.length===1?"":"S"}</div>
-          {instancePanel.content.length===0?<div className="catalog-note">No mod JAR files found in this modpack yet.</div>:instancePanel.content.map((file,index)=><div key={file.name+index} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 12px",border:"1px solid var(--border-color,rgba(255,255,255,.08))",borderRadius:10}}><span style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}><Package size={16}/><b style={{fontSize:13,overflowWrap:"anywhere"}}>{file.name}</b></span><span className="feature-status" style={{whiteSpace:"nowrap"}}>{file.size<1048576?(file.size/1024).toFixed(0)+" KB":(file.size/1048576).toFixed(1)+" MB"}</span></div>)}
-        </div>:<><div className="eyebrow" style={{marginBottom:8}}>THIS MODPACK · MINECRAFT LOGS</div><LogViewer text={instancePanel.logs||"No Minecraft logs found yet. Launch this modpack first."} maxHeight={360}/><button className="secondary-btn" style={{marginTop:10}} onClick={()=>openInstancePanel(selectedInstance,"logs")} disabled={instancePanel.loading}>Refresh logs</button></>)
-         :<div className="catalog-note">Loading modpack details…</div>}
-      <div className="pack-version-actions"><button className="secondary-btn" onClick={()=>setSelectedInstance(null)}>Back to instances</button></div>
+      {selectedInstanceTab==="content"&&<div className="nova-pack-content">
+        <div className="nova-pack-summary">
+          <div className="nova-pack-summary-icon">{selectedInstance.iconUrl?<img src={selectedInstance.iconUrl} alt=""/>:<Box size={28}/>}</div>
+          <div className="nova-pack-summary-copy"><b>Modpack content</b><span><Package size={14}/> {instancePanel?.instance?.instanceName===selectedInstance.instanceName&&!instancePanel.loading?instancePanel.content.length+" mods":"Installed mods"}</span></div>
+          <button className="secondary-btn" onClick={()=>openInstancePanel(selectedInstance,"content")}><Eye size={15}/> View content</button>
+          <button className="icon-btn" title="Manage mods" onClick={()=>{try{localStorage.setItem("nova.modsTargetInstance",selectedInstance.instanceName)}catch{}setSelectedInstance(null);setPage("mods");}}><Wrench size={16}/></button>
+        </div>
+        <div className="nova-pack-provider"><span><ShieldCheck size={15}/> Installed from <b>{selectedInstance.source==="modrinth"?"Modrinth":"CurseForge"}</b></span><span>{selectedInstance.minecraftVersion} · {selectedInstance.loader}{selectedInstance.loaderVersion?" "+selectedInstance.loaderVersion:""}</span><button onClick={()=>openInstancePanel(selectedInstance,"content")}><RefreshCw size={14}/> Refresh</button></div>
+        <div className="nova-pack-section-title"><div><h3>Additional content</h3><p>Mods included in this installed modpack.</p></div><button className="primary-btn" onClick={()=>{try{localStorage.setItem("nova.modsTargetInstance",selectedInstance.instanceName)}catch{}setSelectedInstance(null);setPage("mods");}}><Plus size={14}/> Add content</button></div>
+        {instancePanel?.instance?.instanceName===selectedInstance.instanceName&&instancePanel.tab==="content"?(instancePanel.loading?<div className="catalog-note">Loading installed content…</div>:instancePanel.error?<div className="catalog-note error">{instancePanel.error}</div>:<div className="nova-pack-file-list">
+          <div className="nova-pack-file-head"><span>Project / file</span><span>File size</span><span>Actions</span></div>
+          {instancePanel.content.length===0?<div className="catalog-note">No mod JAR files found in this modpack yet.</div>:instancePanel.content.map((file,index)=><div className="nova-pack-file-row" key={file.name+index}><span className="nova-pack-file-name"><span className="nova-pack-file-icon"><Package size={19}/></span><span><b>{file.name.replace(/\.jar$/i,"")}</b><small>{file.name}</small></span></span><span className="nova-pack-file-size">{file.size<1048576?(file.size/1024).toFixed(0)+" KB":(file.size/1048576).toFixed(1)+" MB"}</span><span className="nova-pack-file-actions"><span className="feature-status">Installed</span></span></div>)}
+        </div>):<div className="catalog-note">Loading installed content…</div>}
+      </div>}
+      {selectedInstanceTab==="files"&&<div className="nova-pack-tab-placeholder"><Folder size={25}/><h3>Modpack files</h3><p>Files installed in this modpack are listed here.</p>{instancePanel?.instance?.instanceName===selectedInstance.instanceName&&!instancePanel.loading&&instancePanel.tab==="content"?<div className="nova-pack-file-list">{instancePanel.content.map((file,index)=><div className="nova-pack-file-row" key={file.name+index}><span className="nova-pack-file-name"><FileText size={18}/><b>{file.name}</b></span><span>{(file.size/1024).toFixed(0)} KB</span></div>)}</div>:<button className="secondary-btn" onClick={()=>openInstancePanel(selectedInstance,"content")}><RefreshCw size={14}/> Load files</button>}</div>}
+      {selectedInstanceTab==="worlds"&&<div className="nova-pack-tab-placeholder"><Globe size={25}/><h3>Worlds</h3><p>World management for this modpack isn't available yet.</p></div>}
+      {selectedInstanceTab==="share"&&<div className="nova-pack-tab-placeholder"><Users size={25}/><h3>Share modpack</h3><p>Exportable share links aren't available yet. Your installed modpack stays on this PC.</p></div>}
+      {selectedInstanceTab==="logs"&&<div className="nova-pack-logs"><div className="nova-pack-section-title"><div><h3>Game logs</h3><p>Output from the selected modpack's Minecraft session.</p></div><button className="secondary-btn" onClick={()=>openInstancePanel(selectedInstance,"logs")}><RefreshCw size={14}/> Refresh</button></div>{instancePanel?.instance?.instanceName===selectedInstance.instanceName&&instancePanel.tab==="logs"?(instancePanel.loading?<div className="catalog-note">Loading game logs…</div>:instancePanel.error?<div className="catalog-note error">{instancePanel.error}</div>:<LogViewer text={instancePanel.logs||"No Minecraft logs found yet. Launch this modpack first."} maxHeight={420}/>):<button className="secondary-btn" onClick={()=>openInstancePanel(selectedInstance,"logs")}>Load game logs</button>}</div>}
+      <div className="nova-pack-manager-footer"><button className="secondary-btn" onClick={()=>removePack(selectedInstance.source+":"+String(selectedInstance.projectId),selectedInstance)}><Trash2 size={14}/> Delete modpack</button><button className="secondary-btn" onClick={()=>setSelectedInstance(null)}>Back to instances</button></div>
     </section></div>}
     {showCustom&&<div className="custom-instance-backdrop" role="presentation" onClick={()=>setShowCustom(false)}><section className="custom-instance-dialog" role="dialog" aria-modal="true" aria-labelledby="custom-instance-title" onClick={e=>e.stopPropagation()}>
       <div className="custom-dialog-top"><div><div className="eyebrow">NOVA INSTANCE BUILDER</div><h2 id="custom-instance-title">Create custom instance</h2><p>Choose a Minecraft version, pick a loader, and give this profile a name.</p></div><button className="icon-btn" onClick={()=>setShowCustom(false)} aria-label="Close"><X size={17}/></button></div>
