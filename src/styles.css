@@ -409,3 +409,63 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 @media(max-width:700px){
   .nova-pack-logs .nova-log-viewer{height:55vh;max-height:55vh!important;min-height:220px}
 }
+
+
+/* Full-size instance tabs: show content, files, worlds and every log line
+   in the normal page flow instead of tiny nested scroll panes. */
+.custom-instance-backdrop:has(.nova-pack-manager){
+  display:block;
+  overflow-y:auto;
+  overflow-x:hidden;
+  min-height:100dvh;
+  padding:24px;
+}
+.nova-pack-manager{
+  width:min(1440px,100%)!important;
+  max-width:1440px!important;
+  max-height:none!important;
+  height:auto!important;
+  margin:0 auto;
+  overflow:visible!important;
+  padding:30px 34px;
+}
+.nova-pack-manager .nova-pack-tabs{
+  width:max-content;
+  max-width:100%;
+  flex-wrap:wrap;
+  overflow:visible;
+}
+.nova-pack-content,.nova-pack-logs,.nova-pack-tab-placeholder{
+  width:100%;
+  min-width:0;
+}
+.nova-pack-tab-placeholder{
+  min-height:44vh;
+  justify-content:flex-start;
+  padding:26px 0;
+}
+.nova-pack-tab-placeholder .nova-pack-file-list{
+  width:100%;
+}
+.nova-pack-logs .nova-log-viewer{
+  width:100%;
+  height:auto!important;
+  min-height:0!important;
+  max-height:none!important;
+  overflow:visible!important;
+  scrollbar-gutter:auto;
+  padding:12px 0;
+}
+.nova-pack-file-list{
+  overflow:visible!important;
+}
+.nova-pack-file-row{
+  min-height:72px;
+}
+@media(max-width:700px){
+  .custom-instance-backdrop:has(.nova-pack-manager){padding:10px}
+  .nova-pack-manager{padding:18px 14px}
+  .nova-pack-manager .nova-pack-tabs{width:100%}
+  .nova-pack-manager .nova-pack-tabs button{flex:1 1 auto;justify-content:center}
+  .nova-pack-file-list{overflow-x:auto!important}
+}
