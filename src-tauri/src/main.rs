@@ -18,6 +18,23 @@ const KEYRING_SERVICE: &str = "NOVA Client";
 const MINECRAFT_ACCOUNT_USER: &str = "minecraft-account";
 const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
 const MICROSOFT_CLIENT_ID: &str = "09e6a2a2-90ee-47a6-92c4-f8810958de91";
+
+static AUTH_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+async fn refresh_saved_minecraft_account(saved_account: &Account) -> Result<Account, String> {
+    let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
+    let auth = Authenticator::new()
+        .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
+    let account = auth.refresh(saved_account).await
+        .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
+    let refreshed_json = serde_json::to_string(&account)
+        .map_err(|e| format!("Could not update the saved account: {e}"))?;
+    credential_entry(MINECRAFT_ACCOUNT_USER)?
+        .set_password(&refreshed_json)
+        .map_err(|e| format!("Could not update the secure account store: {e}"))?;
+    Ok(account)
+}
+
 const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 const MAX_ARCHIVE_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
@@ -231,15 +248,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
         .map_err(|_| "Sign in with Microsoft before completing the modpack installation.".to_string())?;
     let saved_account: Account = serde_json::from_str(&account_json)
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
-    let auth = Authenticator::new()
-        .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
-    let account = auth.refresh(&saved_account).await
-        .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
-    let refreshed_json = serde_json::to_string(&account)
-        .map_err(|e| format!("Could not update the saved account: {e}"))?;
-    credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .set_password(&refreshed_json)
-        .map_err(|e| format!("Could not update the secure account store: {e}"))?;
+    let account = refresh_saved_minecraft_account(&saved_account).await?;
 
     let local_app_data = std::env::var("LOCALAPPDATA")
         .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
@@ -322,15 +331,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         .map_err(|_| "Sign in with your Microsoft account before launching Minecraft.".to_string())?;
     let saved_account: Account = serde_json::from_str(&account_json)
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
-    let auth = Authenticator::new()
-        .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
-    let account = auth.refresh(&saved_account).await
-        .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
-    let refreshed_json = serde_json::to_string(&account)
-        .map_err(|e| format!("Could not update the saved account: {e}"))?;
-    credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .set_password(&refreshed_json)
-        .map_err(|e| format!("Could not update the secure account store: {e}"))?;
+    let account = refresh_saved_minecraft_account(&saved_account).await?;
 
     let local_app_data = std::env::var("LOCALAPPDATA")
         .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
