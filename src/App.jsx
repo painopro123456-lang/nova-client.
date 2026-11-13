@@ -1,3 +1,4 @@
+    if(!signedIn){setPackActionMessage("Your modpack files are downloaded. Sign in with Microsoft when you are ready to install Minecraft and play.");return;}
 import { MICROSOFT_CLIENT_ID } from "./config";
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
@@ -58,7 +59,7 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versi
 }
 
 
-function Catalog({ packs, active, memoryMb }) {
+function Catalog({ packs, active, memoryMb, signedIn }) {
   const [q,setQ]=useState("");
   const [provider,setProvider]=useState("modrinth");
   const [hits,setHits]=useState([]);
@@ -171,13 +172,22 @@ function Catalog({ packs, active, memoryMb }) {
       const metadata=provider==="modrinth"
         ? await invoke("install_modrinth_modpack",{projectId,instanceName,versionId:selectedPackVersion})
         : await invoke("install_curseforge_modpack",{modId:projectId,instanceName,fileId:Number(selectedPackVersion)});
+      // Public modpack files can be downloaded without a Minecraft login.
+      if(!signedIn){
+        const previous=installed[storageKey];
+        if(previous?.instanceName&&previous.instanceName!==metadata.instanceName){
+          try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new pack. */}
+        }
+        setInstalled(old=>({...old,[storageKey]:metadata}));
+        setInstallDialog({name:metadata.name||project.title,step:1,progress:100,status:"Modpack downloaded",detail:"All available modpack files are saved. Sign in with Microsoft only when you're ready to install Minecraft and play.",done:true,error:""});
+        setPackActionMessage((metadata.name||project.title)+" downloaded. Microsoft sign-in is only needed to prepare and launch Minecraft.");
+        return;
+      }
       setInstallDialog({name:metadata.name||project.title,step:1,progress:null,status:"Preparing Minecraft",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""});
       await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName});
-      // Only expose a pack as installed after Minecraft and its loader are ready.
-      // Remove the previous isolated install only after the replacement is ready.
       const previous=installed[storageKey];
       if(previous?.instanceName&&previous.instanceName!==metadata.instanceName){
-        try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new working install even if stale cleanup fails. */}
+        try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new working install. */}
       }
       setInstalled(old=>({...old,[storageKey]:metadata}));
       setInstallDialog({name:metadata.name||project.title,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""});
@@ -229,7 +239,7 @@ function Catalog({ packs, active, memoryMb }) {
       <h3>{x.title}</h3><p>{x.description}</p>
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
       <div className="pack-install-row">{packs&&installed[provider+":"+String(x.id)]
-        ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Install & Play"}</button>
+        ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":signedIn?"Install & Play":"Downloaded · Sign in to play"}</button>
         : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :packs?"Choose version":"Install to instance"}</button>}</div>
     </article>)}</div>}
     {installDialog&&<div className="pack-version-backdrop install-progress-backdrop" role="presentation">
@@ -459,5 +469,5 @@ export default function App() {
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" && <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/>}<div style={{display:page==="mods"?"block":"none"}}><Catalog packs={false} active={page==="mods"} memoryMb={memoryMb}/></div><div style={{display:page==="modpacks"?"block":"none"}}><Catalog packs={true} active={page==="modpacks"} memoryMb={memoryMb}/></div>{page === "instances" && <LocalInstances versions={versions} memoryMb={memoryMb}/>}{page === "settings" && <SettingsPage memoryMb={memoryMb} setMemoryMb={setMemoryMb} updateInfo={updateInfo} updateBusy={updateBusy} updateError={updateError} onCheckUpdates={handleCheckUpdates} onInstallUpdate={handleInstallUpdate}/>}{page === "pvp" && <PvpPage/>}{!["home","mods","modpacks","instances","settings","pvp"].includes(page) && <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" && <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/>}<div style={{display:page==="mods"?"block":"none"}}><Catalog packs={false} active={page==="mods"} memoryMb={memoryMb} signedIn={signedIn}/></div><div style={{display:page==="modpacks"?"block":"none"}}><Catalog packs={true} active={page==="modpacks"} memoryMb={memoryMb} signedIn={signedIn}/></div>{page === "instances" && <LocalInstances versions={versions} memoryMb={memoryMb}/>}{page === "settings" && <SettingsPage memoryMb={memoryMb} setMemoryMb={setMemoryMb} updateInfo={updateInfo} updateBusy={updateBusy} updateError={updateError} onCheckUpdates={handleCheckUpdates} onInstallUpdate={handleInstallUpdate}/>}{page === "pvp" && <PvpPage/>}{!["home","mods","modpacks","instances","settings","pvp"].includes(page) && <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
