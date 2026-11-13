@@ -283,7 +283,7 @@ function LocalInstances({ versions, memoryMb }) {
   </section>;
 }
 
-function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateError, updaterLogs, refreshUpdaterLogs, onCheckUpdates, onInstallUpdate }) {
+function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateError, updaterLogs, refreshUpdaterLogs, gameLogs, refreshGameLogs, onCheckUpdates, onInstallUpdate }) {
   return <section className="local-instances">
     <div className="eyebrow">NOVA PREFERENCES</div><h2>Launcher settings</h2>
     <p>Choose how much memory NOVA gives Minecraft when it launches. The setting is saved on this PC.</p>
@@ -294,6 +294,19 @@ function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateErr
       </select>
     </div>
     <div className="catalog-note">Restart Minecraft after changing this setting. Leave enough memory for Windows and other apps.</div>
+    <div className="section-heading"><div><div className="eyebrow">GAME DIAGNOSTICS</div><h2>Minecraft launch logs</h2></div><button className="secondary-btn" onClick={refreshGameLogs}>Refresh game logs</button></div>
+    <div className="feature-card">
+      <b>Launcher & download activity</b>
+      <p>Sign-in refresh, Minecraft preparation, downloads, launch errors and game exit status. No access tokens are written to this log.</p>
+      <pre className="catalog-note" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:220,overflowY:"auto",fontSize:12,lineHeight:1.6}}>{gameLogs?.launcherLog||"No launcher activity logged yet."}</pre>
+      <span className="feature-status">{gameLogs?.launcherLogPath||"%LOCALAPPDATA%\\NOVA Client\\logs\\game-launch.log"}</span>
+    </div>
+    <div className="feature-card">
+      <b>Minecraft game log</b>
+      <p>The game's own latest.log, including startup errors, mod errors and crash details.</p>
+      <pre className="catalog-note" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:280,overflowY:"auto",fontSize:12,lineHeight:1.6}}>{gameLogs?.minecraftLog||"Minecraft latest.log has not been created yet."}</pre>
+      <span className="feature-status">{gameLogs?.minecraftLogPath||"minecraft\\logs\\latest.log"}</span>
+    </div>
     <div className="section-heading"><div><div className="eyebrow">NOVA SOFTWARE</div><h2>Updates</h2></div></div>
     <div className="feature-card updater-card">
       <div className="feature-icon blue"><ArrowDownToLine size={18}/></div>
@@ -376,7 +389,7 @@ export default function App() {
     return()=>{alive=false;unlisten?.();};
   },[]);
 
-  useEffect(() => { refreshUpdaterLogs(); }, []);
+  useEffect(() => { refreshUpdaterLogs(); refreshGameLogs(); }, []);
   useEffect(() => {
     let alive = true;
     invoke("check_for_updates").then(info => { if (alive) { setUpdateInfo(info); setUpdateError(""); } })
@@ -386,6 +399,10 @@ export default function App() {
   const refreshUpdaterLogs = async () => {
     try { setUpdaterLogs(await invoke("get_updater_logs")); }
     catch (error) { setUpdaterLogs(typeof error === "string" ? error : (error.message || "Could not load updater logs.")); }
+  };
+  const refreshGameLogs = async () => {
+    try { setGameLogs(await invoke("get_game_logs", {instanceName:null})); }
+    catch (error) { setGameLogs({launcherLog:typeof error === "string" ? error : (error.message || "Could not load launcher logs."),minecraftLog:""}); }
   };
   const handleCheckUpdates = async () => {
     setUpdateBusy(true); setUpdateError("");
@@ -403,6 +420,7 @@ export default function App() {
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState("");
   const [updaterLogs, setUpdaterLogs] = useState("Loading updater logs…");
+  const [gameLogs, setGameLogs] = useState({launcherLog:"Loading launcher logs…",minecraftLog:"Loading Minecraft logs…"});
   const [signedIn, setSignedIn] = useState(false);
   const [accountName, setAccountName] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
@@ -467,7 +485,7 @@ export default function App() {
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle} onShowDownloads={()=>{if(installDialog){setDownloadToastVisible(true);setDownloadDetailsOpen(true);}}}/><div className="page-content">{page === "home" && <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/>}<div style={{display:page==="mods"?"block":"none"}}><Catalog packs={false} active={page==="mods"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div><div style={{display:page==="modpacks"?"block":"none"}}><Catalog packs={true} active={page==="modpacks"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div>{page === "instances" && <LocalInstances versions={versions} memoryMb={memoryMb}/>}{page === "settings" && <SettingsPage memoryMb={memoryMb} setMemoryMb={setMemoryMb} updateInfo={updateInfo} updateBusy={updateBusy} updateError={updateError} updaterLogs={updaterLogs} refreshUpdaterLogs={refreshUpdaterLogs} onCheckUpdates={handleCheckUpdates} onInstallUpdate={handleInstallUpdate}/>}{page === "pvp" && <PvpPage/>}{!["home","mods","modpacks","instances","settings","pvp"].includes(page) && <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main>{installDialog&&downloadToastVisible&&<aside className="nova-download-toast" role="status" aria-live="polite">
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle} onShowDownloads={()=>{if(installDialog){setDownloadToastVisible(true);setDownloadDetailsOpen(true);}}}/><div className="page-content">{page === "home" && <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/>}<div style={{display:page==="mods"?"block":"none"}}><Catalog packs={false} active={page==="mods"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div><div style={{display:page==="modpacks"?"block":"none"}}><Catalog packs={true} active={page==="modpacks"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div>{page === "instances" && <LocalInstances versions={versions} memoryMb={memoryMb}/>}{page === "settings" && <SettingsPage memoryMb={memoryMb} setMemoryMb={setMemoryMb} updateInfo={updateInfo} updateBusy={updateBusy} updateError={updateError} updaterLogs={updaterLogs} refreshUpdaterLogs={refreshUpdaterLogs} gameLogs={gameLogs} refreshGameLogs={refreshGameLogs} onCheckUpdates={handleCheckUpdates} onInstallUpdate={handleInstallUpdate}/>}{page === "pvp" && <PvpPage/>}{!["home","mods","modpacks","instances","settings","pvp"].includes(page) && <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main>{installDialog&&downloadToastVisible&&<aside className="nova-download-toast" role="status" aria-live="polite">
     <div className="nova-download-toast-head"><div className={"nova-download-toast-icon"+(installDialog.done?(installDialog.error?" failed":" complete"):"")}><ArrowDownToLine size={17}/></div><div className="nova-download-toast-heading"><b>{installDialog.name}</b><span>{installDialog.done?(installDialog.error?"Installation failed":"Download complete"):installDialog.status||"Downloading files"}</span></div><button className="nova-download-toast-close" title="Hide notification (download continues)" onClick={()=>{setDownloadToastDismissed(true);setDownloadToastVisible(false);}}><X size={15}/></button></div>
     <div className="nova-download-toast-track"><div className={"nova-download-toast-fill"+(!installDialog.done?" active":"")+(installDialog.error?" failed":"")} style={{width:(installDialog.done?100:(typeof installDialog.progress==="number"?installDialog.progress:34))+"%"}}/></div>
     <div className="nova-download-toast-foot"><span>{typeof installDialog.progress==="number"?installDialog.progress+"%":installDialog.done?"Finished":"Working in background"}</span><button onClick={()=>setDownloadDetailsOpen(v=>!v)}>{downloadDetailsOpen?"Hide details":"Details"}</button></div>
