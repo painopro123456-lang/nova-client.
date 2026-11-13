@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box, CheckCircle2,
+  Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box, CheckCircle2, Square,
   ChevronDown, CircleHelp, Compass, Cpu, Gamepad2, Gauge, HardDrive,
   Layers3, LayoutDashboard, Monitor, Moon, MoreHorizontal, Play, Plus,
   Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Users, Package, ScrollText,
@@ -275,7 +275,7 @@ function LocalInstances({ versions, memoryMb, setPage }) {
       if(!alive)return;
       const payload=event.payload||{};
       setLaunchState(current=>current&&current.instanceName===payload.instanceName&&(current.phase==="running"||current.phase==="starting")
-        ?{...current,phase:payload.success?"closed":"crashed",message:payload.success?"Minecraft closed.":"Minecraft exited unexpectedly. Check the logs for the error."}
+        ?{...current,phase:current.phase==="stopping"||payload.success?"closed":"crashed",message:current.phase==="stopping"?"Minecraft stopped.":payload.success?"Minecraft closed.":"Minecraft exited unexpectedly. Check the logs for the error."}
         :current);
     }).then(stop=>{if(alive)unlisten=stop;else stop();}).catch(()=>{});
     return()=>{alive=false;unlisten?.();};
@@ -321,6 +321,18 @@ function LocalInstances({ versions, memoryMb, setPage }) {
       openInstancePanel(instance,"logs");
     }catch(error){
       setLaunchState({instanceName:instance.instanceName,phase:"failed",message:typeof error==="string"?error:(error.message||"Could not launch this instance.")});
+    }
+  };
+  const stopInstance=async instance=>{
+    setLaunchState(current=>current?.instanceName===instance.instanceName
+      ?{...current,phase:"stopping",message:"Stopping Minecraft and its child processes…"}
+      :{instanceName:instance.instanceName,phase:"stopping",message:"Stopping Minecraft…"});
+    try{
+      await invoke("stop_minecraft",{instanceName:instance.instanceName});
+      setLaunchState(current=>current?.instanceName===instance.instanceName&&current.phase==="stopping"
+        ?{...current,message:"Stop signal sent. Waiting for Minecraft to close…"}:current);
+    }catch(error){
+      setLaunchState({instanceName:instance.instanceName,phase:"running",message:typeof error==="string"?error:(error.message||"Could not stop Minecraft.")});
     }
   };
   const playPack=async pack=>launchInstance(pack);
@@ -391,7 +403,7 @@ function LocalInstances({ versions, memoryMb, setPage }) {
           <div><h2 id="selected-instance-title">{selectedInstance.name}</h2><p><span><Package size={13}/> {selectedInstance.loader||"Minecraft"}</span><i/> {selectedInstance.minecraftVersion} <i/> <span><Clock size={13}/> Installed modpack</span></p></div>
         </div>
         <div className="nova-pack-manager-actions">
-          <button className="primary-btn" onClick={()=>playPack(selectedInstance)} disabled={launchState?.instanceName===selectedInstance.instanceName&&launchState.phase==="starting"}><Play size={15} fill="currentColor"/> {launchState?.instanceName===selectedInstance.instanceName&&launchState.phase==="starting"?"Launching…":"Play"}</button>
+          {launchState?.instanceName===selectedInstance.instanceName&&["starting","running","stopping"].includes(launchState.phase)?<button className="nova-stop-button" onClick={()=>stopInstance(selectedInstance)} disabled={launchState.phase==="stopping"}><Square size={14} fill="currentColor"/> {launchState.phase==="starting"?"Starting…":launchState.phase==="stopping"?"Stopping…":"Stop"}</button>:<button className="primary-btn" onClick={()=>playPack(selectedInstance)}><Play size={15} fill="currentColor"/> Play</button>}
           <button className="icon-btn" title="Modpack settings" onClick={()=>setAction("Modpack settings are coming soon.")}><Settings size={17}/></button>
           <button className="icon-btn" title="Close" onClick={()=>setSelectedInstance(null)}><X size={17}/></button>
         </div>
