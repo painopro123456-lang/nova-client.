@@ -1975,6 +1975,29 @@ fn list_instances() -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
+fn list_instance_content(instance_name: String) -> Result<Vec<Value>, String> {
+    let folder = instance_folder(&instance_name)?;
+    let mods_dir = folder.join("mods");
+    if !mods_dir.exists() { return Ok(Vec::new()); }
+    let entries = std::fs::read_dir(&mods_dir)
+        .map_err(|e| format!("Could not read this instance's mods folder: {e}"))?;
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Could not read a mod entry: {e}"))?;
+        let path = entry.path();
+        if !path.is_file() || !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jar")) { continue; }
+        let metadata = entry.metadata().map_err(|e| format!("Could not inspect mod file: {e}"))?;
+        files.push(json!({
+            "name": path.file_name().and_then(|v| v.to_str()).unwrap_or("Unknown mod"),
+            "size": metadata.len()
+        }));
+        if files.len() >= 500 { break; }
+    }
+    files.sort_by(|a,b| a["name"].as_str().unwrap_or("").to_lowercase().cmp(&b["name"].as_str().unwrap_or("").to_lowercase()));
+    Ok(files)
+}
+
+#[tauri::command]
 fn delete_instance(instance_name: String) -> Result<(), String> {
     let name = safe_instance_name(&instance_name)?;
     let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
@@ -2132,6 +2155,7 @@ fn main() {
             install_mod_to_instance,
             create_instance,
             list_instances,
+            list_instance_content,
             delete_instance
         ])
         .run(tauri::generate_context!())
