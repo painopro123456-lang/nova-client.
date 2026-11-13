@@ -18,7 +18,7 @@ public final class NovaClient implements ClientModInitializer {
         openMenuKey=KeyMappingHelper.registerKeyMapping(new KeyMapping(
             "key.nova.open_menu",
             InputConstants.Type.KEYSYM,
-            InputConstants.KEY_RIGHT_SHIFT,
+            InputConstants.KEY_RSHIFT,
             CATEGORY
         ));
         NovaMenuScreen.initialize();

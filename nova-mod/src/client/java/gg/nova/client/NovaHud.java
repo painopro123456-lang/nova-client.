@@ -11,6 +11,7 @@ import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
 import net.minecraft.world.item.ItemStack;
+import net.minecraft.world.entity.EquipmentSlot;
 
 public final class NovaHud {
     private static final DateTimeFormatter CLOCK=DateTimeFormatter.ofPattern("HH:mm:ss");
@@ -53,9 +54,9 @@ public final class NovaHud {
             line(graphics,client,"Keystrokes",client.options.keyJump.isDown()?"[ SPACE ]":"[ space ]",8,72);
         }
         if(NovaMenuScreen.isEnabled("Armor Status")) {
-            List<ItemStack> armor=client.player.getInventory().armor;
             int armorY=94;
-            for(ItemStack stack:armor) {
+            for(EquipmentSlot slot:List.of(EquipmentSlot.FEET,EquipmentSlot.LEGS,EquipmentSlot.CHEST,EquipmentSlot.HEAD)) {
+                ItemStack stack=client.player.getItemBySlot(slot);
                 if(stack.isEmpty())continue;
                 int remaining=Math.max(0,stack.getMaxDamage()-stack.getDamageValue());
                 line(graphics,client,"Armor Status",stack.getHoverName().getString()+"  "+remaining,8,armorY);

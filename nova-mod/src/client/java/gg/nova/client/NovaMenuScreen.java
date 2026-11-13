@@ -2,6 +2,7 @@ package gg.nova.client;
 
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
+import net.minecraft.client.input.MouseButtonEvent;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
@@ -123,8 +124,9 @@ public final class NovaMenuScreen extends Screen {
     }
 
     @Override
-    public boolean mouseClicked(double mx,double my,int button) {
-        if(button!=0)return super.mouseClicked(mx,my,button);
+    public boolean mouseClicked(MouseButtonEvent event,boolean doubleClick) {
+        double mx=event.x(),my=event.y();
+        if(event.button()!=0)return super.mouseClicked(event,doubleClick);
         int pw=Math.min(760,width-40),ph=Math.min(480,height-40),l=(width-pw)/2,t=(height-ph)/2;
         String[] cats={"All","HUD","Visual","Player","Mods"};
         for(int i=0;i<cats.length;i++) {
@@ -153,7 +155,7 @@ public final class NovaMenuScreen extends Screen {
             }
             settingsModule=null;return true;
         }
-        return super.mouseClicked(mx,my,button);
+        return super.mouseClicked(event,doubleClick);
     }
 
     @Override
