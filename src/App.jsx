@@ -421,7 +421,7 @@ function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateErr
     <div className="instance-create">
       <label htmlFor="nova-ram-setting">MAXIMUM MEMORY</label>
       <select id="nova-ram-setting" value={String(memoryMb)} onChange={e=>setMemoryMb(Number(e.target.value))}>
-        <option value="2048">2 GB</option><option value="3072">3 GB</option><option value="4096">4 GB (default)</option><option value="6144">6 GB</option><option value="8192">8 GB</option>
+        <option value="2048">2 GB (recommended for 4 GB PCs)</option><option value="3072">3 GB</option><option value="4096">4 GB (default)</option><option value="6144">6 GB</option><option value="8192">8 GB</option>
       </select>
     </div>
     <div className="catalog-note">Restart Minecraft after changing this setting. Leave enough memory for Windows and other apps.</div>
@@ -487,7 +487,7 @@ export default function App() {
   const [versions, setVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(true);
   const [loaderType, setLoaderType] = useState("vanilla");
-  const [memoryMb, setMemoryMb] = useState(()=>{try{const n=Number(localStorage.getItem("nova.ramMb")||4096);return [2048,3072,4096,6144,8192].includes(n)?n:4096;}catch{return 4096;}});
+  const [memoryMb, setMemoryMb] = useState(()=>{try{const n=Number(localStorage.getItem("nova.ramMb")||2048);return [2048,3072,4096,6144,8192].includes(n)?n:2048;}catch{return 2048;}});
   useEffect(()=>{try{localStorage.setItem("nova.ramMb",String(memoryMb));}catch{}},[memoryMb]);
   useEffect(()=>{
     let alive=true;
