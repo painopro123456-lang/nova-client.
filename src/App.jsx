@@ -310,11 +310,11 @@ function PvpPage({onNavigate}) {
 function SettingsPage({memoryMax,setMemoryMax}) {
   return <section className="local-instances">
     <div className="eyebrow">NOVA PREFERENCES</div><h2>Performance settings</h2>
-    <p>Choose the maximum memory available to Minecraft. Start with 4 GB; increase it only when your PC has enough free memory.</p>
+    <p>NOVA chooses a conservative first-run limit from your installed RAM. You can adjust it here at any time.</p>
     <div className="instance-create">
       <label htmlFor="nova-memory">GAME MEMORY</label>
-      <select id="nova-memory" value={memoryMax} onChange={e=>setMemoryMax(e.target.value)}>
-        {["2G","3G","4G","6G","8G","12G","16G"].map(v=><option key={v} value={v}>{v.replace("G"," GB")}</option>)}
+      <select id="nova-memory" value={memoryMax||"4G"} onChange={e=>setMemoryMax(e.target.value)}>
+        {["1G","2G","3G","4G","6G","8G","12G","16G"].map(v=><option key={v} value={v}>{v.replace("G"," GB")}</option>)}
       </select>
     </div>
     <div className="catalog-note">The selected limit is applied to new launches and modpack preparation. It does not reserve memory while Minecraft is closed.</div>
@@ -339,8 +339,14 @@ export default function App() {
   const [versions, setVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(true);
   const [loaderType, setLoaderType] = useState("vanilla");
-  const [memoryMax,setMemoryMax]=useState(()=>readStored("nova.memoryMax","4G",v=>["2G","3G","4G","6G","8G","12G","16G"].includes(v)));
-  useEffect(()=>{writeStored("nova.memoryMax",memoryMax);},[memoryMax]);
+  const [memoryMax,setMemoryMax]=useState(()=>readStored("nova.memoryMax",null,v=>["1G","2G","3G","4G","6G","8G","12G","16G"].includes(v)));
+  useEffect(()=>{if(memoryMax)writeStored("nova.memoryMax",memoryMax);},[memoryMax]);
+  useEffect(()=>{
+    let alive=true;
+    const saved=readStored("nova.memoryMax",null,v=>["1G","2G","3G","4G","6G","8G","12G","16G"].includes(v));
+    if(!saved)invoke("recommended_memory_max").then(value=>{if(alive&&!readStored("nova.memoryMax",null,v=>["1G","2G","3G","4G","6G","8G","12G","16G"].includes(v)))setMemoryMax(value);}).catch(()=>{if(alive)setMemoryMax("4G");});
+    return()=>{alive=false;};
+  },[]);
   const [launching, setLaunching] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [accountName, setAccountName] = useState("");
