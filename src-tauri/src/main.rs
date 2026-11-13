@@ -263,7 +263,11 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
         options.loader.build = loader_build.clone();
         options.loader.enable = true;
     }
-    options.memory.max = "4G".to_owned();
+    let memory_mb = memory_mb.unwrap_or(4096);
+    if !(1024..=16384).contains(&memory_mb) {
+        return Err("Memory allocation must be between 1024 MB and 16384 MB.".into());
+    }
+    options.memory.max = format!("{memory_mb}M");
     options.download_concurrency = 8;
 
     let launch = Launch::new(options, account)
@@ -282,7 +286,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
 }
 
 #[tauri::command]
-async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>) -> Result<(), String> {
+async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>, memory_mb: Option<u32>) -> Result<(), String> {
     let mut version = version.trim().to_owned();
     let mut loader = loader.unwrap_or_else(|| "vanilla".to_owned());
     let mut loader_build = loader_build.unwrap_or_else(|| "latest".to_owned());
