@@ -382,19 +382,27 @@ function LogViewer({ text: raw, maxHeight=260 }) {
   const parsed=rows.map((line,index)=>{
     let time="";
     let message=line;
+    let level="";
     const unix=line.match(/^\[unix:(\d+)\]\s*(.*)$/);
     if(unix){time=new Date(Number(unix[1])*1000).toLocaleTimeString();message=unix[2];}
     else {
       const stamp=line.match(/^\[([^\]]+)\]\s*(.*)$/);
-      if(stamp){time=stamp[1];message=stamp[2];}
+      if(stamp){
+        message=stamp[2];
+        const bracketLevel=stamp[1].match(/(?:^|\/)(TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)(?:$|\s)/i);
+        if(bracketLevel)level=bracketLevel[1].toUpperCase();
+        else if(/\d{1,2}:\d{2}:\d{2}/.test(stamp[1]))time=stamp[1];
+        else message=stamp[1]+" "+message;
+      }
     }
     const levelMatch=message.match(/\b(TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)\b/i);
-    let level=levelMatch?levelMatch[1].toUpperCase():"INFO";
-    if(level==="WARNING")level="WARN";
-    if(!levelMatch){
+    if(!level&&levelMatch)level=levelMatch[1].toUpperCase();
+    if(!level){
       if(/\b(error|failed|failure|exception|could not|cannot|crash|fatal)\b/i.test(message))level="ERROR";
       else if(/\b(warn|warning|retry|deprecated|missing)\b/i.test(message))level="WARN";
+      else level="INFO";
     }
+    if(level==="WARNING")level="WARN";
     return {key:index,time,level,message};
   });
   return <div className="nova-log-viewer" style={{maxHeight}} role="log" aria-live="polite">
