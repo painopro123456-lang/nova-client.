@@ -511,7 +511,7 @@ async fn download_pack_archive(app: &tauri::AppHandle, url: &str, destination: &
     if !url.starts_with("https://") {
         return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());
     }
-    let response = http_client()?.get(url).send().await
+    let response = download_client()?.get(url).send().await
         .map_err(|e| format!("Archive download failed: {e}"))?
         .error_for_status().map_err(|e| format!("Archive server returned an error: {e}"))?;
     if response.url().scheme() != "https" {
@@ -589,7 +589,7 @@ async fn download_pack_file(app: &tauri::AppHandle, url: &str, destination: &Pat
     if expected_size.is_some_and(|size| size > MAX_ARCHIVE_FILE_BYTES) {
         return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
     }
-    let response = http_client()?.get(url).send().await
+    let response = download_client()?.get(url).send().await
         .map_err(|e| format!("Mod download failed: {e}"))?
         .error_for_status().map_err(|e| format!("Mod download server returned an error: {e}"))?;
     if response.url().scheme() != "https" {
