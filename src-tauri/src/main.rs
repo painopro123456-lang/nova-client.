@@ -268,10 +268,30 @@ async fn install_update_inner(app: tauri::AppHandle) -> Result<(), String> {
     updater_log(&format!("Installer download complete: {} bytes.", bytes.len()));
     let installer = std::env::temp_dir().join(format!("NOVA-Client-Update-{}.exe", std::process::id()));
     std::fs::write(&installer, &bytes).map_err(|e| format!("Could not save the NOVA installer: {e}"))?;
-    std::process::Command::new(&installer).spawn()
-        .map_err(|e| format!("Could not start the NOVA installer: {e}"))?;
-    updater_log("Installer process launched; closing NOVA for setup.");
-    tokio::time::sleep(Duration::from_millis(900)).await;
+
+    // A small detached PowerShell helper waits for NOVA to exit, runs the
+    // NSIS installer silently, then relaunches the same installed executable.
+    // If setup fails, it still reopens the existing launcher.
+    let executable = std::env::current_exe()
+        .map_err(|e| format!("Could not locate the installed NOVA launcher: {e}"))?;
+    let quote_ps = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "''"));
+    let script = std::env::temp_dir().join(format!("NOVA-Client-Update-{}.ps1", std::process::id()));
+    let script_contents = format!(
+        "$ErrorActionPreference = 'Continue'\n$launcherPid = {}\nwhile (Get-Process -Id $launcherPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 300 }}\n$setup = Start-Process -FilePath {} -ArgumentList '/S' -Wait -PassThru\nStart-Process -FilePath {}\nRemove-Item -LiteralPath $PSCommandPath -Force\n",
+        std::process::id(), quote_ps(&installer), quote_ps(&executable)
+    );
+    std::fs::write(&script, script_contents)
+        .map_err(|e| format!("Could not prepare the NOVA restart helper: {e}"))?;
+    if let Err(error) = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .spawn()
+    {
+        let _ = std::fs::remove_file(&script);
+        return Err(format!("Could not start the NOVA update helper: {error}"));
+    }
+    updater_log("Update downloaded. Closing NOVA; the installer will run silently and reopen the launcher.");
+    tokio::time::sleep(Duration::from_millis(350)).await;
     app.exit(0);
     Ok(())
 }
