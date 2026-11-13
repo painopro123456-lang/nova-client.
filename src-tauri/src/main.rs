@@ -9,7 +9,7 @@ use sha1::{Digest, Sha1};
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
 use std::time::{Duration, Instant};
 use zip::ZipArchive;
 use tauri::Emitter;
@@ -22,11 +22,12 @@ const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 const MAX_ARCHIVE_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 static ACTIVE_LAUNCHES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(12))
-        .timeout(Duration::from_secs(60))
+        .timeout(Duration::from_secs(300))
         .build()
         .map_err(|e| format!("Could not initialize secure network client: {e}"))
 }
@@ -481,7 +482,8 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = destination.parent().ok_or("Download destination has no parent folder.")?;
     std::fs::create_dir_all(parent).map_err(|e| format!("Could not create download folder: {e}"))?;
     let file_name = destination.file_name().and_then(|n| n.to_str()).unwrap_or("download");
-    let temporary = parent.join(format!(".{file_name}.{}.partial", std::process::id()));
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".{file_name}.{}.{sequence}.partial", std::process::id()));
     std::fs::write(&temporary, bytes).map_err(|e| format!("Could not write temporary download: {e}"))?;
     if let Err(error) = std::fs::rename(&temporary, destination) {
         let _ = std::fs::remove_file(&temporary);
@@ -705,7 +707,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         let bytes = fetch_bytes(&url).await?;
         let filename = format!("{project}-{file}.jar");
         std::fs::create_dir_all(folder.join("mods")).map_err(|e| format!("Could not create mods folder: {e}"))?;
-        std::fs::write(folder.join("mods").join(filename), bytes)
+        atomic_write(&folder.join("mods").join(filename), &bytes)
             .map_err(|e| format!("Could not save CurseForge mod {}: {e}", i+1))?;
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
