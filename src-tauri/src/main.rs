@@ -496,6 +496,13 @@ fn extract_pack_overrides(archive_path: &Path, prefix: &str, destination: &Path)
                 std::io::copy(&mut entry, &mut file)
                     .map_err(|e| format!("Could not extract pack override: {e}"))?;
                 file.flush().map_err(|e| format!("Could not flush pack override: {e}"))?;
+                // std::fs::rename does not replace an existing destination on Windows.
+                // Modpack overrides commonly replace default config files, so remove the
+                // old file first and then move the fully-written temporary file into place.
+                if output.exists() {
+                    std::fs::remove_file(&output)
+                        .map_err(|e| format!("Could not replace existing pack override: {e}"))?;
+                }
                 std::fs::rename(&temporary, &output)
                     .map_err(|e| format!("Could not finalize pack override: {e}"))?;
                 Ok(())
@@ -804,7 +811,10 @@ async fn install_mod_to_instance_inner(
                 url,
                 file["fileName"].as_str().ok_or("CurseForge file name is missing.")?.to_owned(),
                 file["fileLength"].as_u64(),
-                None,
+                file["hashes"].as_array()
+                    .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
+                    .and_then(|hash| hash["value"].as_str())
+                    .map(str::to_owned),
                 file["displayName"].as_str().unwrap_or("Mod").to_owned(),
             )
         },
