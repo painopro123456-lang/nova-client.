@@ -339,6 +339,33 @@ function LocalInstances({ versions, memoryMb }) {
   </section>;
 }
 
+function LogViewer({ text: raw, maxHeight=260 }) {
+  const rows=String(raw||"").split(/\r?\n/).filter(Boolean).slice(-500);
+  const parsed=rows.map((line,index)=>{
+    let time="";
+    let message=line;
+    const unix=line.match(/^\[unix:(\d+)\]\s*(.*)$/);
+    if(unix){time=new Date(Number(unix[1])*1000).toLocaleTimeString();message=unix[2];}
+    else {
+      const stamp=line.match(/^\[([^\]]+)\]\s*(.*)$/);
+      if(stamp){time=stamp[1];message=stamp[2];}
+    }
+    const levelMatch=message.match(/\b(TRACE|DEBUG|INFO|WARN(?:ING)?|ERROR|FATAL)\b/i);
+    let level=levelMatch?levelMatch[1].toUpperCase():"INFO";
+    if(level==="WARNING")level="WARN";
+    if(!levelMatch){
+      if(/\b(error|failed|failure|exception|could not|cannot|crash|fatal)\b/i.test(message))level="ERROR";
+      else if(/\b(warn|warning|retry|deprecated|missing)\b/i.test(message))level="WARN";
+    }
+    return {key:index,time,level,message};
+  });
+  return <div className="nova-log-viewer" style={{maxHeight}} role="log" aria-live="polite">
+    {parsed.length===0?<div className="nova-log-empty">No log entries yet.</div>:parsed.map(row=><div className={"nova-log-row level-"+row.level.toLowerCase()} key={row.key}>
+      <span className="nova-log-time">{row.time||"—"}</span><span className="nova-log-level">{row.level}</span><span className="nova-log-message">{row.message}</span>
+    </div>)}
+  </div>;
+}
+
 function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateError, updaterLogs, refreshUpdaterLogs, gameLogs, refreshGameLogs, onCheckUpdates, onInstallUpdate }) {
   return <section className="local-instances">
     <div className="eyebrow">NOVA PREFERENCES</div><h2>Launcher settings</h2>
@@ -354,13 +381,13 @@ function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateErr
     <div className="feature-card">
       <b>Launcher & download activity</b>
       <p>Sign-in refresh, Minecraft preparation, downloads, launch errors and game exit status. No access tokens are written to this log.</p>
-      <pre className="catalog-note" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:220,overflowY:"auto",fontSize:12,lineHeight:1.6}}>{gameLogs?.launcherLog||"No launcher activity logged yet."}</pre>
+      <LogViewer text={gameLogs?.launcherLog||"No launcher activity logged yet."} maxHeight={260}/>
       <span className="feature-status">{gameLogs?.launcherLogPath||"%LOCALAPPDATA%\\NOVA Client\\logs\\game-launch.log"}</span>
     </div>
     <div className="feature-card">
       <b>Minecraft game log</b>
       <p>The game's own latest.log, including startup errors, mod errors and crash details.</p>
-      <pre className="catalog-note" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:280,overflowY:"auto",fontSize:12,lineHeight:1.6}}>{gameLogs?.minecraftLog||"Minecraft latest.log has not been created yet."}</pre>
+      <LogViewer text={gameLogs?.minecraftLog||"Minecraft latest.log has not been created yet."} maxHeight={320}/>
       <span className="feature-status">{gameLogs?.minecraftLogPath||"minecraft\\logs\\latest.log"}</span>
     </div>
     <div className="section-heading"><div><div className="eyebrow">NOVA SOFTWARE</div><h2>Updates</h2></div></div>
