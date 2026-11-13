@@ -896,7 +896,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
     options.memory.min = "512M".to_owned();
     options.memory.max = format!("{memory_mb}M");
     game_log(&format!("Minecraft heap: requested {requested_memory_mb} MB, using {memory_mb} MB after checking system RAM."));
-    options.download_concurrency = 16;
+    options.download_concurrency = 6;
 
     game_log(&format!("Starting Minecraft {version} ({loader}) in profile '{}'.", instance_name.as_deref().unwrap_or("default")));
     let crash_root = game_root.clone();
@@ -1793,7 +1793,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
 
     let mut metadata_jobs = tokio::task::JoinSet::new();
     let mut metadata_iter = required_files.into_iter();
-    const MAX_PARALLEL_MOD_DOWNLOADS: usize = 4;
+    const MAX_PARALLEL_MOD_DOWNLOADS: usize = 2;
     for _ in 0..MAX_PARALLEL_MOD_DOWNLOADS {
         if let Some((number, project, file)) = metadata_iter.next() {
             let client = client.clone();
