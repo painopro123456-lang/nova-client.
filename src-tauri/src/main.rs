@@ -62,9 +62,13 @@ fn reset_logs_for_launch(game_root: &Path, instance_name: Option<&str>) -> Resul
     // used by older launcher-core layouts). Mods, worlds, and saves are untouched.
     if let Some(name) = instance_name {
         let safe_name = safe_instance_name(name)?;
-        reset_log_file(&game_root.join("instances").join(safe_name).join("logs").join("latest.log"))?;
+        let instance_logs = game_root.join("instances").join(safe_name).join("logs");
+        reset_log_file(&instance_logs.join("latest.log"))?;
+        reset_log_file(&instance_logs.join("debug.log"))?;
     }
-    reset_log_file(&game_root.join("logs").join("latest.log"))?;
+    let shared_logs = game_root.join("logs");
+    reset_log_file(&shared_logs.join("latest.log"))?;
+    reset_log_file(&shared_logs.join("debug.log"))?;
     Ok(())
 }
 
@@ -87,55 +91,89 @@ fn get_game_logs(instance_name: Option<String>) -> Result<Value, String> {
     let root = PathBuf::from(local_app_data).join("NOVA Client").join("minecraft");
     let mut minecraft_sections = Vec::new();
     let mut minecraft_paths = Vec::new();
+
     if let Some(name) = instance_name.as_deref() {
         let safe_name = safe_instance_name(name)?;
-        let game_dir = root.join("instances").join(&safe_name);
-        // Different launcher-core versions may resolve the instance game directory
-        // either under instances/<name> or the shared game root. Check both.
-        let candidates = [
-            game_dir.join("logs").join("latest.log"),
-            root.join("logs").join("latest.log"),
+        let instance_logs = root.join("instances").join(&safe_name).join("logs");
+        let shared_logs = root.join("logs");
+        // CrustCore normally writes to instances/<name>/logs. Keep the shared
+        // game-root paths as a fallback for profiles created by older builds.
+        let mut candidates = vec![
+            instance_logs.join("latest.log"),
+            instance_logs.join("debug.log"),
+            shared_logs.join("latest.log"),
+            shared_logs.join("debug.log"),
         ];
-        let found = candidates.iter().find(|path| path.is_file()).cloned();
-        if let Some(path) = found {
-            minecraft_sections.push(format!("=== {} ===\n{}", name, tail_file(&path, 500)));
+        candidates.retain(|path| path.is_file());
+        candidates.sort_by_key(|path| {
+            std::fs::metadata(path).and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH)
+        });
+
+        for path in candidates.iter() {
+            let contents = tail_file(path, 1200);
+            if contents.trim().is_empty() { continue; }
+            let filename = path.file_name().and_then(|value| value.to_str()).unwrap_or("Minecraft log");
+            minecraft_sections.push(format!("=== {} · {} ===\n{}", name, filename, contents));
             minecraft_paths.push(path.display().to_string());
-        } else {
-            let expected = candidates[0].display().to_string();
-            minecraft_sections.push(format!(
-                "No Minecraft log exists for this instance yet. Launch this modpack once, then open Logs again.\nExpected file: {expected}"
-            ));
+        }
+
+        if minecraft_sections.is_empty() {
+            let any_log_file = [
+                instance_logs.join("latest.log"),
+                instance_logs.join("debug.log"),
+                shared_logs.join("latest.log"),
+                shared_logs.join("debug.log"),
+            ].iter().any(|path| path.is_file());
+            let expected = instance_logs.join("latest.log").display().to_string();
+            minecraft_sections.push(if any_log_file {
+                format!("Minecraft log files exist but are still empty. Waiting for the game to write output.\nExpected instance log: {expected}")
+            } else {
+                format!("No Minecraft log has been created for this instance yet. Start the modpack and keep this tab open.\nExpected instance log: {expected}")
+            });
             minecraft_paths.push(expected);
         }
     } else {
-        let default_log = root.join("logs").join("latest.log");
-        if default_log.exists() {
-            minecraft_sections.push(format!("=== Default Minecraft ===\n{}", tail_file(&default_log, 350)));
-            minecraft_paths.push(default_log.display().to_string());
+        let default_logs = root.join("logs");
+        for filename in ["latest.log", "debug.log"] {
+            let path = default_logs.join(filename);
+            if path.is_file() {
+                let contents = tail_file(&path, 1200);
+                if !contents.trim().is_empty() {
+                    minecraft_sections.push(format!("=== Default Minecraft · {} ===\n{}", filename, contents));
+                    minecraft_paths.push(path.display().to_string());
+                }
+            }
         }
         let instances_dir = root.join("instances");
         if let Ok(entries) = std::fs::read_dir(&instances_dir) {
             for entry in entries.flatten().take(30) {
                 if !entry.file_type().is_ok_and(|kind| kind.is_dir()) { continue; }
-                let path = entry.path().join("logs").join("latest.log");
-                if path.is_file() {
-                    minecraft_sections.push(format!("=== Instance {} ===\n{}", entry.file_name().to_string_lossy(), tail_file(&path, 350)));
-                    minecraft_paths.push(path.display().to_string());
+                let logs_dir = entry.path().join("logs");
+                for filename in ["latest.log", "debug.log"] {
+                    let path = logs_dir.join(filename);
+                    if path.is_file() {
+                        let contents = tail_file(&path, 600);
+                        if !contents.trim().is_empty() {
+                            minecraft_sections.push(format!("=== Instance {} · {} ===\n{}", entry.file_name().to_string_lossy(), filename, contents));
+                            minecraft_paths.push(path.display().to_string());
+                        }
+                    }
                 }
             }
         }
         if minecraft_sections.is_empty() {
-            minecraft_sections.push("No Minecraft latest.log files have been created yet. Launch a profile once to generate its game log.".into());
+            minecraft_sections.push("No Minecraft latest.log or debug.log files have been created yet. Launch a profile to generate its game logs.".into());
         }
     }
+
     Ok(json!({
-        "launcherLog": tail_file(&game_log_path(), 300),
+        "launcherLog": tail_file(&game_log_path(), 500),
         "minecraftLog": minecraft_sections.join("\n\n"),
         "launcherLogPath": game_log_path().display().to_string(),
-        "minecraftLogPath": if minecraft_paths.is_empty() { "Minecraft logs\\\\latest.log".to_owned() } else { minecraft_paths.join(" | ") }
+        "minecraftLogPath": if minecraft_paths.is_empty() { "Minecraft logs".to_owned() } else { minecraft_paths.join(" | ") }
     }))
 }
-
 #[cfg(windows)]
 fn safe_minecraft_memory_mb(requested: u32) -> u32 {
     use winapi::um::sysinfoapi::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
@@ -950,7 +988,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         if !success {
             log_latest_crash_report(&crash_root, crash_instance.as_deref());
         }
-        let _ = app.emit("nova-game-exit", json!({"success":success,"code":code}));
+        let _ = app.emit("nova-game-exit", json!({"instanceName":crash_instance,"success":success,"code":code}));
     });
     Ok(())
 }
