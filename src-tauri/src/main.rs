@@ -681,7 +681,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
     }
     // Modpack preparation installs files only; RAM allocation is applied when the
     // user launches the instance.
-    options.download_concurrency = 8;
+    options.download_concurrency = 16;
 
     game_log(&format!("Preparing modpack instance '{name}' for Minecraft {version} ({loader})."));
     let launch = Launch::new(options, account)
@@ -778,7 +778,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         return Err("Memory allocation must be between 1024 MB and 16384 MB.".into());
     }
     options.memory.max = format!("{memory_mb}M");
-    options.download_concurrency = 8;
+    options.download_concurrency = 16;
 
     game_log(&format!("Starting Minecraft {version} ({loader}) in profile '{}'.", instance_name.as_deref().unwrap_or("default")));
     let launch = Launch::new(options, account)
