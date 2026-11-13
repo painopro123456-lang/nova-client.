@@ -40,11 +40,19 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 22
+          cache: npm
+          cache-dependency-path: D:/a/nova-src/package-lock.json
 
       - name: Set up Rust
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: "D:/a/nova-src/src-tauri -> target"
+          cache-all-crates: true
 
       - name: Install dependencies
         working-directory: D:/a/nova-src
