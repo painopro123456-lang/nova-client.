@@ -347,7 +347,7 @@ function LocalInstances({ versions, memoryMb, setPage }) {
       <div className="instance-card-actions" style={{justifyContent:"flex-start",flexWrap:"wrap",gap:10,margin:"18px 0"}}>
         <button className="primary-btn" onClick={()=>playPack(selectedInstance)}><Play size={14} fill="currentColor"/> Launch</button>
         <button className="secondary-btn" onClick={()=>{try{localStorage.setItem("nova.modsTargetInstance",selectedInstance.instanceName)}catch{}setSelectedInstance(null);setPage("mods");}}><Blocks size={14}/> Add mods</button>
-        <button className="secondary-btn" onClick={()=>removePack(selectedInstance.source+":"+String(selectedInstance.projectId),selectedInstance)}><Trash2 size={14}/> Delete pack</button>
+        <button className="secondary-btn" onClick={()=>removePack(selectedInstance.source+":"+String(selectedInstance.projectId),selectedInstance)}><X size={14}/> Delete pack</button>
       </div>
       <div className="custom-version-filters" style={{marginBottom:14}}>
         <button className={selectedInstanceTab==="content"?"selected":""} onClick={()=>{setSelectedInstanceTab("content");openInstancePanel(selectedInstance,"content");}}><Package size={14}/> Content</button>
