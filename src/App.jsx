@@ -261,7 +261,8 @@ function LocalInstances({ versions, memoryMb, setPage }) {
   const [versionFilter,setVersionFilter]=useState("release");
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
-  const [instancePanel,setInstancePanel]=useState(null);\n  const [selectedInstance,setSelectedInstance]=useState(null);
+  const [instancePanel,setInstancePanel]=useState(null);
+  const [selectedInstance,setSelectedInstance]=useState(null);
   const [showCustom,setShowCustom]=useState(false);
   const [creating,setCreating]=useState(false);
   useEffect(()=>{
