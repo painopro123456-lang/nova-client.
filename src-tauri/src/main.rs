@@ -136,7 +136,7 @@ async fn curseforge_search(
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
 
     let class_id = if packs { "4471" } else { "6" };
-    let client = reqwest::Client::new();
+    let client = http_client()?;
     let mut request = client
         .get(format!("{CURSEFORGE_API}/mods/search"))
         .headers(headers)
@@ -290,7 +290,7 @@ fn sign_out_minecraft() -> Result<(), String> {
 
 #[tauri::command]
 async fn minecraft_versions() -> Result<Value, String> {
-    let response = reqwest::Client::new()
+    let response = http_client()?
         .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
         .send()
         .await
@@ -464,7 +464,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
     if version.is_empty() || version.eq_ignore_ascii_case("null") || version.eq_ignore_ascii_case("undefined") {
         return Err("No Minecraft version was selected. Choose a version and try again.".into());
     }
-    let manifest = reqwest::Client::new()
+    let manifest = http_client()?
         .get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
         .send().await
         .map_err(|e| format!("Could not verify Minecraft version {version}: {e}"))?
@@ -712,7 +712,7 @@ fn save_instance_metadata(folder: &Path, metadata: Value) -> Result<Value, Strin
 async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let _install_guard=InstallGuard::acquire(name.clone())?;
-    let client = reqwest::Client::new();
+    let client = http_client()?;
     let versions: Value = client.get(format!("https://api.modrinth.com/v2/project/{project_id}/version"))
         .send().await.map_err(|e| format!("Could not reach Modrinth: {e}"))?
         .error_for_status().map_err(|e| format!("Modrinth returned an error: {e}"))?
@@ -790,7 +790,7 @@ async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
     let mut headers = HeaderMap::new();
     headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-    let client = reqwest::Client::new();
+    let client = http_client()?;
     let mut all_files = Vec::new();
     // CurseForge paginates file history. Fetch every page in bounded batches so
     // older releases are available in NOVA's version picker as well.
@@ -814,7 +814,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     let name = safe_instance_name(&instance_name)?;
     let _install_guard=InstallGuard::acquire(name.clone())?;
     let api_key = curseforge_api_key()?;
-    let client = reqwest::Client::new();
+    let client = http_client()?;
     let mut headers = HeaderMap::new();
     headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
