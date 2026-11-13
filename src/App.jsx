@@ -82,8 +82,8 @@ function Catalog({ packs, memoryMax }) {
 
   useEffect(()=>{
     const ctrl=new AbortController();
+    setBusy(true); setError(""); setHits([]); setHasNext(false);
     const timer=setTimeout(async()=>{
-      setBusy(true); setError(""); setHits([]); setHasNext(false);
       try {
         let results=[];
         let canContinue=false;
