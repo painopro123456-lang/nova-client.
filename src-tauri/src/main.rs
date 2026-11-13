@@ -7,7 +7,7 @@ use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
-use std::net::TcpListener;
+use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::time::{Duration, Instant};
 use std::sync::{Mutex, OnceLock};
@@ -102,79 +102,99 @@ async fn curseforge_search(
 }
 
 #[tauri::command]
+fn write_callback_page(stream: &mut TcpStream, status: &str, heading: &str, message: &str) -> Result<(),String> {
+    let body=format!("<!doctype html><html><head><meta charset=\"utf-8\"><title>NOVA Client</title></head><body style=\"font-family:Segoe UI,sans-serif;background:#10131c;color:#f5f7fb;display:grid;place-items:center;min-height:90vh\"><main><h2>{heading}</h2><p>{message}</p></main></body></html>");
+    let response=format!("HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",body.len(),body);
+    stream.write_all(response.as_bytes()).map_err(|e|format!("Could not finish the Microsoft sign-in callback: {e}"))
+}
+
+fn query_parameter(target: &str, key: &str) -> Option<String> {
+    target.split('?').nth(1)?.split('#').next()?.split('&').find_map(|part| {
+        let (name,value)=part.split_once('=')?;
+        if name==key { Some(value.to_owned()) } else { None }
+    })
+}
+
+#[tauri::command]
 async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> {
-    // Use NOVA's approved public-client app and the authorization-code + PKCE flow.
-    // Microsoft opens the normal account sign-in page; the loopback callback returns
-    // the authorization response directly to this desktop app (no device code).
-    let auth = Authenticator::with_client_id(MICROSOFT_CLIENT_ID)
-        .map_err(|e| format!("Could not start Microsoft sign-in: {e}"))?;
-    // Bind through the same hostname used by the registered OAuth redirect.
-    let listener = TcpListener::bind(("localhost", 0))
-        .map_err(|e| format!("Could not start the local Microsoft sign-in callback: {e}"))?;
-    let port = listener.local_addr()
-        .map_err(|e| format!("Could not prepare the Microsoft sign-in callback: {e}"))?
-        .port();
-    let redirect_uri = format!("http://localhost:{port}");
-    let request = auth.authorize_request_with_redirect(redirect_uri.clone());
-    let login_url = request.url.clone();
+    let auth=Authenticator::with_client_id(MICROSOFT_CLIENT_ID)
+        .map_err(|e|format!("Could not start Microsoft sign-in: {e}"))?;
+    let listener=TcpListener::bind(("localhost",0))
+        .map_err(|e|format!("Could not start the local Microsoft sign-in callback: {e}"))?;
+    let port=listener.local_addr().map_err(|e|format!("Could not prepare the Microsoft sign-in callback: {e}"))?.port();
+    let redirect_uri=format!("http://localhost:{port}");
+    let request=auth.authorize_request_with_redirect(redirect_uri.clone());
+    let login_url=request.url.clone();
+    let expected_state=query_parameter(&login_url,"state")
+        .ok_or_else(||"Microsoft authorization request did not contain an OAuth state.".to_string())?;
 
-    app.emit("nova-login-link", login_url.clone())
-        .map_err(|e| format!("Could not show the Microsoft sign-in link: {e}"))?;
+    app.emit("nova-login-link",login_url.clone())
+        .map_err(|e|format!("Could not show the Microsoft sign-in link: {e}"))?;
     webbrowser::open(&login_url)
-        .map_err(|e| format!("Could not open the Microsoft sign-in page: {e}"))?;
+        .map_err(|e|format!("Could not open the Microsoft sign-in page: {e}"))?;
 
-    let redirect_url = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        listener.set_nonblocking(true)
-            .map_err(|e| format!("Could not configure the Microsoft sign-in callback: {e}"))?;
-        let deadline = Instant::now() + Duration::from_secs(180);
-        let (stream, _) = loop {
-            match listener.accept() {
-                Ok(connection) => break connection,
-                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
-                    if Instant::now() >= deadline {
-                        return Err("Microsoft sign-in timed out. Start sign-in again and finish it in your browser.".into());
-                    }
-                    std::thread::sleep(Duration::from_millis(200));
-                }
-                Err(error) => return Err(format!("Could not receive Microsoft's sign-in response: {error}")),
+    let callback=tokio::task::spawn_blocking(move || -> Result<(String,TcpStream),String> {
+        listener.set_nonblocking(true).map_err(|e|format!("Could not configure the Microsoft sign-in callback: {e}"))?;
+        let deadline=Instant::now()+Duration::from_secs(180);
+        loop {
+            if Instant::now()>=deadline {
+                return Err("Microsoft sign-in timed out. Start sign-in again and finish it in your browser.".into());
             }
-        };
-        let mut stream = stream;
-        stream.set_read_timeout(Some(Duration::from_secs(8)))
-            .map_err(|e|format!("Could not configure the Microsoft callback timeout: {e}"))?;
-        let mut reader = BufReader::new(stream);
-        let mut first_line = String::new();
-        reader.read_line(&mut first_line)
-            .map_err(|e| format!("Could not read Microsoft's sign-in response: {e}"))?;
-        let mut stream = reader.into_inner();
-
-        let target = first_line.split_whitespace().nth(1)
-            .ok_or_else(|| "Microsoft returned an invalid sign-in response.".to_string())?;
-        if !target.starts_with('/') || target.starts_with("//") {
-            return Err("Microsoft returned an unsafe sign-in callback URL.".into());
+            let (stream,_)=match listener.accept() {
+                Ok(connection)=>connection,
+                Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>{std::thread::sleep(Duration::from_millis(150));continue;}
+                Err(error)=>return Err(format!("Could not receive Microsoft's sign-in response: {error}")),
+            };
+            let mut stream=stream;
+            if stream.set_read_timeout(Some(Duration::from_secs(5))).is_err(){continue;}
+            let mut reader=BufReader::new(stream);
+            let mut first_line=String::new();
+            if reader.read_line(&mut first_line).is_err()||first_line.len()>8192 {continue;}
+            let parts=first_line.split_whitespace().collect::<Vec<_>>();
+            if parts.len()!=3||parts[0]!="GET"||!parts[1].starts_with('/')||parts[1].starts_with("//") {
+                let mut rejected=reader.into_inner();
+                let _=write_callback_page(&mut rejected,"400 Bad Request","Invalid sign-in callback","Return to NOVA and try signing in again.");
+                continue;
+            }
+            let target=parts[1].to_owned();
+            let mut host_ok=false;
+            let mut headers_valid=true;
+            for _ in 0..32 {
+                let mut line=String::new();
+                if reader.read_line(&mut line).is_err()||line.len()>8192 {headers_valid=false;break;}
+                if line=="\r\n"||line=="\n" {break;}
+                if let Some((name,value))=line.split_once(':') {
+                    if name.eq_ignore_ascii_case("host") {
+                        let host=value.trim();
+                        host_ok=host==format!("localhost:{port}")||host==format!("127.0.0.1:{port}");
+                    }
+                }
+            }
+            let state_ok=query_parameter(&target,"state").as_deref()==Some(expected_state.as_str());
+            let mut stream=reader.into_inner();
+            if !headers_valid||!host_ok||!state_ok {
+                let _=write_callback_page(&mut stream,"400 Bad Request","Sign-in request rejected","This local request was not the Microsoft sign-in response. You can close this tab and retry.");
+                continue;
+            }
+            return Ok((format!("{redirect_uri}{target}"),stream));
         }
+    }).await.map_err(|e|format!("Microsoft sign-in callback stopped unexpectedly: {e}"))??;
 
-        let body = "<!doctype html><html><head><meta charset=\"utf-8\"><title>NOVA Client</title></head><body style=\"font-family:Segoe UI,sans-serif;background:#10131c;color:#f5f7fb;display:grid;place-items:center;min-height:90vh\"><main><h2>Microsoft sign-in complete</h2><p>You can close this tab and return to NOVA Client.</p></main></body></html>";
-        let response = format!(
-            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
-            body.len(), body
-        );
-        stream.write_all(response.as_bytes())
-            .map_err(|e| format!("Could not finish the Microsoft sign-in callback: {e}"))?;
-        Ok(format!("{redirect_uri}{target}"))
-    }).await.map_err(|e| format!("Microsoft sign-in callback stopped unexpectedly: {e}"))??;
-
-    // AuthorizeRequest validates the OAuth state and PKCE verifier before exchanging the code.
-    let account = request.login(&auth, &redirect_url).await
-        .map_err(|e| format!("Microsoft sign-in failed: {e}"))?;
-    let account_json = serde_json::to_string(&account)
-        .map_err(|e| format!("Could not prepare the signed-in account: {e}"))?;
-    credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .set_password(&account_json)
-        .map_err(|e| format!("Could not securely save the Minecraft account: {e}"))?;
-
-    app.emit("nova-login-complete", account.name.clone())
-        .map_err(|e| format!("Signed in, but could not update NOVA: {e}"))?;
+    let (redirect_url,mut callback_stream)=callback;
+    let account=match request.login(&auth,&redirect_url).await {
+        Ok(account)=>account,
+        Err(error)=>{
+            let _=write_callback_page(&mut callback_stream,"400 Bad Request","Microsoft sign-in failed","Return to NOVA and start sign-in again.");
+            return Err(format!("Microsoft sign-in failed: {error}"));
+        }
+    };
+    write_callback_page(&mut callback_stream,"200 OK","Microsoft sign-in complete","You can close this tab and return to NOVA Client.")?;
+    let account_json=serde_json::to_string(&account)
+        .map_err(|e|format!("Could not prepare the signed-in account: {e}"))?;
+    credential_entry(MINECRAFT_ACCOUNT_USER)?.set_password(&account_json)
+        .map_err(|e|format!("Could not securely save the Minecraft account: {e}"))?;
+    app.emit("nova-login-complete",account.name.clone())
+        .map_err(|e|format!("Signed in, but could not update NOVA: {e}"))?;
     Ok(account.name)
 }
 
