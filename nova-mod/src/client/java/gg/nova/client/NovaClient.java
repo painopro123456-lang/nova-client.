@@ -8,6 +8,8 @@ import com.mojang.blaze3d.platform.InputConstants;
 import org.lwjgl.glfw.GLFW;
 import net.minecraft.resources.Identifier;
 import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenEvents;
+import net.fabricmc.fabric.api.client.screen.v1.ScreenKeyboardEvents;
 public final class NovaClient implements ClientModInitializer {
     private KeyMapping openMenuKey;
     @Override public void onInitializeClient() {
@@ -16,9 +18,19 @@ public final class NovaClient implements ClientModInitializer {
         openMenuKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.nova.open_menu", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_SHIFT, category));
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
             while (openMenuKey.consumeClick()) {
-                Screen current = client.gui.screen();
-                if (current instanceof NovaMenuScreen) client.gui.setScreen(null);
-                else if (client.player != null) client.gui.setScreen(new NovaMenuScreen());
+                if (client.gui.screen() == null && client.player != null) {
+                    client.gui.setScreen(new NovaMenuScreen());
+                }
+            }
+        });
+        ScreenEvents.BEFORE_INIT.register((client, screen, scaledWidth, scaledHeight) -> {
+            if (screen instanceof NovaMenuScreen) {
+                ScreenKeyboardEvents.beforeKeyPress(screen).register((current, keyEvent) -> {
+                    if (openMenuKey.matches(keyEvent)) {
+                        while (openMenuKey.consumeClick()) { }
+                        client.gui.setScreen(null);
+                    }
+                });
             }
         });
     }
