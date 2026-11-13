@@ -325,3 +325,62 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .nova-pack-logs{display:grid;gap:14px}
 .nova-pack-manager-footer{display:flex;justify-content:space-between;gap:10px;margin-top:22px;padding-top:15px;border-top:1px solid rgba(255,255,255,.1)}
 @media(max-width:700px){.nova-pack-manager{padding:16px}.nova-pack-manager-head{align-items:flex-start;flex-direction:column}.nova-pack-manager-actions{width:100%}.nova-pack-manager-identity h2{font-size:19px}.nova-pack-manager-icon{width:52px;height:52px}.nova-pack-summary{flex-wrap:wrap}.nova-pack-file-head,.nova-pack-file-row{grid-template-columns:minmax(0,1fr) 70px}.nova-pack-file-head span:last-child,.nova-pack-file-actions{display:none}.nova-pack-tabs button{padding:9px 11px}}
+
+
+/* Readability fix: make the modpack file list and game logs comfortably readable */
+.nova-pack-manager{
+  width:min(1200px,calc(100vw - 32px));
+  max-height:calc(100dvh - 32px);
+  padding:28px 30px;
+}
+.nova-pack-content{gap:24px;min-width:0}
+.nova-pack-file-list{overflow-x:auto;overflow-y:visible}
+.nova-pack-file-head,.nova-pack-file-row{
+  grid-template-columns:minmax(0,1fr) 150px 140px;
+  gap:18px;
+  padding:15px 20px;
+}
+.nova-pack-file-row{min-height:78px}
+.nova-pack-file-name{min-width:0;align-items:center}
+.nova-pack-file-name b,.nova-pack-file-name small{
+  display:block;
+  white-space:normal;
+  overflow:visible;
+  text-overflow:clip;
+  overflow-wrap:anywhere;
+  line-height:1.5;
+}
+.nova-pack-file-name b{font-size:15px}
+.nova-pack-file-name small{font-size:13px}
+.nova-pack-file-size{font-size:14px}
+.nova-log-viewer{
+  max-height:min(68vh,680px)!important;
+  overflow:auto;
+  padding:12px 0;
+  font-size:13px;
+  line-height:1.65;
+}
+.nova-log-row{
+  grid-template-columns:104px 76px minmax(0,1fr);
+  gap:13px;
+  padding:7px 16px;
+}
+.nova-log-time{font-size:12px}
+.nova-log-level{font-size:11px;padding:3px 7px}
+.nova-log-message{
+  min-width:0;
+  font-size:13px;
+  line-height:1.65;
+  white-space:pre-wrap;
+  overflow-wrap:anywhere;
+  word-break:normal;
+}
+@media(max-width:700px){
+  .nova-pack-manager{width:calc(100vw - 16px);max-height:calc(100dvh - 16px);padding:16px}
+  .nova-pack-file-head,.nova-pack-file-row{grid-template-columns:minmax(0,1fr) 88px;gap:10px;padding:12px}
+  .nova-pack-file-name b{font-size:13px}
+  .nova-pack-file-name small{font-size:12px}
+  .nova-log-row{grid-template-columns:1fr;gap:3px}
+  .nova-log-time{display:none}
+  .nova-log-level{justify-self:start}
+}
