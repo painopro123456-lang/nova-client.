@@ -89,7 +89,8 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
     // the authorization response directly to this desktop app (no device code).
     let auth = Authenticator::with_client_id(MICROSOFT_CLIENT_ID)
         .map_err(|e| format!("Could not start Microsoft sign-in: {e}"))?;
-    let listener = TcpListener::bind(("127.0.0.1", 0))
+    // Bind through the same hostname used by the registered OAuth redirect.
+    let listener = TcpListener::bind(("localhost", 0))
         .map_err(|e| format!("Could not start the local Microsoft sign-in callback: {e}"))?;
     let port = listener.local_addr()
         .map_err(|e| format!("Could not prepare the Microsoft sign-in callback: {e}"))?
@@ -192,7 +193,7 @@ async fn minecraft_versions() -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn prepare_modpack_instance(instance_name: String) -> Result<Value, String> {
+async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let folder = instance_folder(&name)?;
     let metadata: Value = serde_json::from_slice(
@@ -205,6 +206,7 @@ async fn prepare_modpack_instance(instance_name: String) -> Result<Value, String
     let loader = metadata["loader"].as_str().unwrap_or("vanilla").to_ascii_lowercase();
     let loader_build = metadata["loaderVersion"].as_str().unwrap_or("latest").to_owned();
 
+    emit_pack_progress(&app, "preparing", 0, 0, "Preparing Minecraft, Java and mod loader");
     // Preparing a modpack installs Minecraft, Java, libraries, assets and its loader
     // into the selected instance without starting the game.
     let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
@@ -251,6 +253,7 @@ async fn prepare_modpack_instance(instance_name: String) -> Result<Value, String
         .map_err(|e| format!("Could not prepare modpack installation: {e}"))?;
     launch.prepare().await
         .map_err(|e| format!("Minecraft or mod-loader installation failed: {e}"))?;
+    emit_pack_progress(&app, "ready", 1, 1, "Minecraft and mod loader are ready");
 
     Ok(json!({
         "ready": true,
@@ -348,6 +351,11 @@ async fn launch_minecraft(version: String, loader: Option<String>, loader_build:
     Ok(())
 }
 
+
+fn emit_pack_progress(app: &tauri::AppHandle, phase: &str, completed: u64, total: u64, detail: &str) {
+    let percent = if total > 0 { Some(((completed as f64 / total as f64) * 90.0).round() as u32) } else { None };
+    let _ = app.emit("nova-pack-progress", json!({"phase":phase,"completed":completed,"total":total,"percent":percent,"detail":detail}));
+}
 
 fn safe_instance_name(input: &str) -> Result<String, String> {
     let value: String = input.trim().chars()
@@ -458,7 +466,7 @@ fn save_instance_metadata(folder: &Path, metadata: Value) -> Result<Value, Strin
 }
 
 #[tauri::command]
-async fn install_modrinth_modpack(project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
+async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let client = reqwest::Client::new();
     let versions: Value = client.get(format!("https://api.modrinth.com/v2/project/{project_id}/version"))
@@ -471,6 +479,7 @@ async fn install_modrinth_modpack(project_id: String, instance_name: String, ver
     let file = latest["files"].as_array().and_then(|a| a.iter().find(|f| f["primary"].as_bool() == Some(true)).or_else(|| a.first()))
         .ok_or("Modrinth did not provide a modpack archive.")?;
     let download_url = file["url"].as_str().ok_or("Modrinth download URL is missing.")?;
+    emit_pack_progress(&app, "archive", 0, 0, "Downloading Modrinth archive");
     let archive_bytes = fetch_bytes(download_url).await?;
     let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
         .map_err(|e| format!("The Modrinth pack is not a valid ZIP archive: {e}"))?;
@@ -492,7 +501,11 @@ async fn install_modrinth_modpack(project_id: String, instance_name: String, ver
     } else { ("vanilla".to_owned(), String::new()) };
     let folder = instance_folder(&name)?;
     std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
-    for (i, item) in index["files"].as_array().ok_or("Modrinth manifest has no files list.")?.iter().enumerate() {
+    let pack_files = index["files"].as_array().ok_or("Modrinth manifest has no files list.")?;
+    let total_files = pack_files.iter().filter(|item| item["env"]["client"].as_str() != Some("unsupported")).count() as u64;
+    let mut completed_files = 0u64;
+    emit_pack_progress(&app, "files", 0, total_files, "Downloading Modrinth files");
+    for (i, item) in pack_files.iter().enumerate() {
         if item["env"]["client"].as_str() == Some("unsupported") { continue; }
         let relative = safe_relative_path(item["path"].as_str().ok_or("A Modrinth file path is missing.")?)?;
         let urls = item["downloads"].as_array().ok_or("A Modrinth file has no download URLs.")?;
@@ -500,7 +513,9 @@ async fn install_modrinth_modpack(project_id: String, instance_name: String, ver
         let size = item["fileSize"].as_u64();
         let sha1 = item["hashes"]["sha1"].as_str();
         download_pack_file(url, &folder.join(relative), size, sha1).await
-            .map_err(|e| format!("Mod file {} of {}: {e}", i + 1, index["files"].as_array().map(|a|a.len()).unwrap_or(0)))?;
+            .map_err(|e| format!("Mod file {} of {}: {e}", i + 1, pack_files.len()))?;
+        completed_files += 1;
+        emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
     }
     extract_pack_overrides(&archive_bytes, "overrides/", &folder)?;
     extract_pack_overrides(&archive_bytes, "client-overrides/", &folder)?;
@@ -538,7 +553,7 @@ async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn install_curseforge_modpack(mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
+async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let api_key = curseforge_api_key()?;
     let client = reqwest::Client::new();
@@ -580,6 +595,7 @@ async fn install_curseforge_modpack(mod_id: String, instance_name: String, file_
         .error_for_status().map_err(|e| format!("CurseForge did not provide a download URL: {e}"))?
         .json::<Value>().await.map_err(|e| format!("CurseForge download response was unreadable: {e}"))?["data"]
         .as_str().ok_or("CurseForge did not provide a downloadable archive URL for this file.")?.to_owned();
+    emit_pack_progress(&app, "archive", 0, 0, "Downloading CurseForge archive");
     let archive_bytes = fetch_bytes(&manifest_url).await?;
     let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
         .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
@@ -600,6 +616,9 @@ async fn install_curseforge_modpack(mod_id: String, instance_name: String, file_
     let folder = instance_folder(&name)?;
     std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
     let pack_files = manifest["files"].as_array().ok_or("CurseForge manifest has no files list.")?;
+    let total_files = pack_files.iter().filter(|item| item["required"].as_bool() != Some(false)).count() as u64;
+    let mut completed_files = 0u64;
+    emit_pack_progress(&app, "files", 0, total_files, "Downloading CurseForge files");
     for (i, item) in pack_files.iter().enumerate() {
         if item["required"].as_bool() == Some(false) { continue; }
         let project = item["projectID"].as_u64().ok_or("CurseForge project ID is missing.")?;
@@ -614,6 +633,8 @@ async fn install_curseforge_modpack(mod_id: String, instance_name: String, file_
         std::fs::create_dir_all(folder.join("mods")).map_err(|e| format!("Could not create mods folder: {e}"))?;
         std::fs::write(folder.join("mods").join(filename), bytes)
             .map_err(|e| format!("Could not save CurseForge mod {}: {e}", i+1))?;
+        completed_files += 1;
+        emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
     }
     extract_pack_overrides(&archive_bytes, "overrides/", &folder)?;
     let title = manifest["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(&name).to_owned();
