@@ -113,7 +113,7 @@ function Catalog({ packs, active, memoryMb }) {
       setInstallDialog(current=>current?{
         ...current,
         progress:typeof progress.percent==="number"?progress.percent:null,
-        status:progress.phase==="preparing"?"Preparing Minecraft":progress.phase==="archive"?"Downloading modpack archive":"Downloading modpack files",
+        status:progress.phase==="preparing"?"Preparing Minecraft":progress.phase==="archive"?"Downloading modpack archive":current.status==="Installing mod"?"Downloading mod":"Downloading modpack files",
         detail:progress.detail||current.detail
       }:current);
     }).then(stop=>{if(alive)unlisten=stop;else stop();});
@@ -216,7 +216,7 @@ function Catalog({ packs, active, memoryMb }) {
       </div>
     </div>
     <div className="catalog-search-row">
-      <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks, themes, adventures…":"Search mods, performance, shaders, utilities…"}/>{q&&<button className="clear-search" onClick={()=>setQ("")} aria-label="Clear search"><X size={14}/></button>}</div>
+      <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks, themes, adventures…":"Search mods, performance, shaders, utilities…"}/>{q&&<button className="clear-search" onClick={()=>{setQ("");setPage(0);}} aria-label="Clear search"><X size={14}/></button>}</div>
       <div className="catalog-source-pill"><span className="source-dot"/> {provider==="modrinth"?"MODRINTH INDEX":"CURSEFORGE API"}</div>
     </div>
     {busy&&<div className="catalog-state"><div className="loading-orbit"/><b>Finding great projects</b><span>Searching {provider==="modrinth"?"Modrinth":"CurseForge"}…</span></div>}
@@ -234,18 +234,18 @@ function Catalog({ packs, active, memoryMb }) {
     </article>)}</div>}
     {installDialog&&<div className="pack-version-backdrop install-progress-backdrop" role="presentation">
       <section className="pack-version-dialog install-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="install-progress-title">
-        <div className="eyebrow">NOVA / MODPACK INSTALLER</div>
-        <h3 id="install-progress-title">{installDialog.done?(installDialog.error?"Installation stopped":"You're all set"):"Installing your modpack"}</h3>
+        <div className="eyebrow">NOVA / {packs?"MODPACK":"MOD"} INSTALLER</div>
+        <h3 id="install-progress-title">{installDialog.done?(installDialog.error?"Installation stopped":"You're all set"):(packs?"Installing your modpack":"Installing your mod")}</h3>
         <p className="install-progress-name">{installDialog.name}</p>
         <div className="install-progress-track"><div className={"install-progress-fill"+(!installDialog.done?" is-active":"")} style={{width:(installDialog.done?100:(typeof installDialog.progress==="number"?installDialog.progress:32))+"%"}}/></div>
         <div className="install-progress-percent">{typeof installDialog.progress==="number"?installDialog.progress+"%":"Working…"}</div>
         <div className="install-progress-status"><span className={installDialog.done?(installDialog.error?"progress-failed":"progress-complete"):"progress-running"}>{installDialog.done?(installDialog.error?"!":"✓"):""}</span><b>{installDialog.status}</b></div>
         <p className="install-progress-detail">{installDialog.detail}</p>
-        <div className="install-progress-steps">
+        {packs?<div className="install-progress-steps">
           <div className={installDialog.step>=0?"complete":""}><span>1</span><label>Modpack files</label></div>
           <div className={installDialog.step>=1?"complete":""}><span>2</span><label>Minecraft & Java</label></div>
           <div className={installDialog.step>=2?"complete":""}><span>3</span><label>Ready to play</label></div>
-        </div>
+        </div>:<div className="install-progress-steps"><div className={installDialog.step>=2?"complete":""}><span>1</span><label>Mod installed</label></div></div>}
         {installDialog.error&&<div className="install-progress-error">{installDialog.error}</div>}
         {installDialog.done&&<div className="pack-version-actions"><button className="primary-btn" onClick={()=>setInstallDialog(null)}>Close</button></div>}
       </section>
