@@ -646,14 +646,6 @@ fn copy_atomic<R:Read>(source:&mut R,destination:&Path)->Result<(),String>{
     std::fs::rename(&temp,destination).map_err(|e|{let _=std::fs::remove_file(&temp);format!("Could not finalize override file: {e}")})
 }
 
-fn write_atomic(destination:&Path,bytes:&[u8])->Result<(),String>{
-    if let Some(parent)=destination.parent(){std::fs::create_dir_all(parent).map_err(|e|format!("Could not create download folder: {e}"))?;}
-    let temp=destination.with_extension(format!("nova-{}.part",std::process::id()));
-    std::fs::write(&temp,bytes).map_err(|e|format!("Could not write temporary download: {e}"))?;
-    if destination.exists(){std::fs::remove_file(destination).map_err(|e|format!("Could not replace an existing file: {e}"))?;}
-    std::fs::rename(&temp,destination).map_err(|e|{let _=std::fs::remove_file(&temp);format!("Could not finalize downloaded file: {e}")})
-}
-
 async fn download_to_file(url:&str,destination:&Path,app:&tauri::AppHandle,instance_name:&str,phase:&str,detail:&str,expected_size:Option<u64>,expected_sha1:Option<&str>)->Result<(),String>{
     if !url.starts_with("https://"){return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());}
     if let Some(parent)=destination.parent(){std::fs::create_dir_all(parent).map_err(|e|format!("Could not create download folder: {e}"))?;}
