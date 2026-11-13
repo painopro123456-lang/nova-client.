@@ -499,20 +499,67 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 async fn download_pack_file(url: &str, destination: &Path, expected_size: Option<u64>, expected_sha1: Option<&str>) -> Result<(), String> {
-    let bytes = fetch_bytes(url).await?;
-    if let Some(size) = expected_size {
-        if bytes.len() as u64 != size {
-            return Err(format!("A mod file had an unexpected size (expected {size}, received {}).", bytes.len()));
-        }
+    if !url.starts_with("https://") {
+        return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());
     }
-    if let Some(expected) = expected_sha1.filter(|s| !s.is_empty()) {
-        let digest = Sha1::digest(&bytes);
-        let actual = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err("A mod file failed its SHA-1 integrity check.".into());
-        }
+    if expected_size.is_some_and(|size| size > MAX_ARCHIVE_FILE_BYTES) {
+        return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
     }
-    atomic_write(destination, &bytes).map_err(|e| format!("Could not save a downloaded mod: {e}"))
+    let response = http_client()?.get(url).send().await
+        .map_err(|e| format!("Mod download failed: {e}"))?
+        .error_for_status().map_err(|e| format!("Mod download server returned an error: {e}"))?;
+    if response.content_length().is_some_and(|size| size > MAX_ARCHIVE_FILE_BYTES) {
+        return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
+    }
+    let parent = destination.parent().ok_or("Download destination has no parent folder.")?;
+    tokio::fs::create_dir_all(parent).await
+        .map_err(|e| format!("Could not create download folder: {e}"))?;
+    let file_name = destination.file_name().and_then(|n| n.to_str()).unwrap_or("download");
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".{file_name}.{}.{sequence}.partial", std::process::id()));
+    let result: Result<(), String> = async {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(&temporary).await
+            .map_err(|e| format!("Could not create temporary mod download: {e}"))?;
+        let mut response = response;
+        let mut hasher = Sha1::new();
+        let mut downloaded = 0u64;
+        while let Some(chunk) = response.chunk().await
+            .map_err(|e| format!("Could not read mod download: {e}"))? {
+            downloaded = downloaded.checked_add(chunk.len() as u64)
+                .ok_or("Mod download size overflowed.")?;
+            if downloaded > MAX_ARCHIVE_FILE_BYTES {
+                return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
+            }
+            if expected_size.is_some_and(|size| downloaded > size) {
+                return Err("A mod file exceeded the size declared by its manifest.".into());
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk).await
+                .map_err(|e| format!("Could not write temporary mod download: {e}"))?;
+        }
+        file.flush().await.map_err(|e| format!("Could not flush mod download: {e}"))?;
+        drop(file);
+        if let Some(size) = expected_size {
+            if downloaded != size {
+                return Err(format!("A mod file had an unexpected size (expected {size}, received {downloaded})."));
+            }
+        }
+        if let Some(expected) = expected_sha1.filter(|s| !s.is_empty()) {
+            let digest = hasher.finalize();
+            let actual = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err("A mod file failed its SHA-1 integrity check.".into());
+            }
+        }
+        std::fs::rename(&temporary, destination)
+            .map_err(|e| format!("Could not finalize downloaded mod: {e}"))?;
+        Ok(())
+    }.await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result
 }
 
 fn loader_from_id(id: &str) -> Result<(String, String), String> {
@@ -711,10 +758,10 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
             .error_for_status().map_err(|e| format!("CurseForge could not provide mod {}: {e}", i+1))?
             .json::<Value>().await.map_err(|e| format!("CurseForge mod {} response was unreadable: {e}", i+1))?["data"]
             .as_str().ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}. The author may have disabled third-party downloads."))?.to_owned();
-        let bytes = fetch_bytes(&url).await?;
         let filename = format!("{project}-{file}.jar");
-        std::fs::create_dir_all(folder.join("mods")).map_err(|e| format!("Could not create mods folder: {e}"))?;
-        atomic_write(&folder.join("mods").join(filename), &bytes)
+        let mods_folder = folder.join("mods");
+        std::fs::create_dir_all(&mods_folder).map_err(|e| format!("Could not create mods folder: {e}"))?;
+        download_pack_file(&url, &mods_folder.join(filename), None, None).await
             .map_err(|e| format!("Could not save CurseForge mod {}: {e}", i+1))?;
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
