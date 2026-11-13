@@ -502,3 +502,25 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .nova-launch-status.phase-running b{background:#174d35;color:#83f0b0}
 .nova-launch-status.phase-failed b,.nova-launch-status.phase-crashed b{background:#59252c;color:#ffabb4}
 .nova-launch-status.phase-closed b{background:#343b46;color:#d0d7e1}
+
+
+/* Red Stop action while a Minecraft process is active. */
+.nova-stop-button{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  min-height:38px;
+  padding:0 16px;
+  border:1px solid #ff5964;
+  border-radius:9px;
+  background:#d92d3a;
+  color:#fff;
+  font:inherit;
+  font-weight:700;
+  cursor:pointer;
+  transition:background .15s ease,transform .15s ease,opacity .15s ease;
+}
+.nova-stop-button:hover:not(:disabled){background:#b91f2d;transform:translateY(-1px)}
+.nova-stop-button:disabled{opacity:.65;cursor:wait}
+.nova-launch-status.phase-stopping b{background:#59252c;color:#ffabb4}
