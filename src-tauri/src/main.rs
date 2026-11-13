@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::time::{Duration, Instant};
 use std::sync::{Mutex, OnceLock};
 use std::collections::HashSet;
@@ -44,6 +44,27 @@ fn active_instances() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTANCES.get_
 fn active_installs() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTALLS.get_or_init(|| Mutex::new(HashSet::new())) }
 fn cancelled_installs() -> &'static Mutex<HashSet<String>> { CANCELLED_INSTALLS.get_or_init(|| Mutex::new(HashSet::new())) }
 fn is_install_cancelled(name:&str)->bool { cancelled_installs().lock().map(|set|set.contains(name)).unwrap_or(false) }
+
+fn claim_install_marker(folder:&Path)->Result<(),String>{
+    let marker=folder.join(".nova-installing");
+    if marker.exists(){
+        let pid=std::fs::read_to_string(&marker).ok().and_then(|value|value.trim().parse::<u32>().ok());
+        let stale=match pid{
+            Some(pid)=>!process_is_running(pid),
+            None=>std::fs::metadata(&marker).and_then(|metadata|metadata.modified()).ok()
+                .and_then(|modified|modified.elapsed().ok()).is_some_and(|age|age>Duration::from_secs(600))
+        };
+        if !stale{return Err("Another NOVA process is already installing files into this instance.".into());}
+        let _=std::fs::remove_file(&marker);
+    }
+    let mut file=OpenOptions::new().write(true).create_new(true).open(&marker)
+        .map_err(|_|"Another NOVA process started installing this instance. Try again when it finishes.".to_string())?;
+    if let Err(error)=file.write_all(std::process::id().to_string().as_bytes()).and_then(|_|file.flush()){
+        drop(file);let _=std::fs::remove_file(&marker);
+        return Err(format!("Could not lock the instance for installation: {error}"));
+    }
+    Ok(())
+}
 struct InstallGuard { name: String }
 impl InstallGuard {
     fn acquire(name: String) -> Result<Self,String> {
@@ -341,10 +362,12 @@ async fn install_mod_file(app:tauri::AppHandle,provider:String,project_id:String
         return Err("The provider returned a file that is not a safe JAR filename.".into());
     }
     ensure_free_space(&folder,size.unwrap_or(0).saturating_add(128*1024*1024))?;
+    claim_install_marker(&folder)?;
     let mods_folder=folder.join("mods");
     std::fs::create_dir_all(&mods_folder).map_err(|e|format!("Could not create the instance mods folder: {e}"))?;
     let destination=mods_folder.join(relative);
     download_pack_file(&app,&name,&url,&destination,size,sha1.as_deref(),&format!("Installing {safe_name}")).await?;
+    let _=std::fs::remove_file(folder.join(".nova-installing"));
     Ok(json!({"instanceName":name,"projectId":project_id,"provider":provider,"fileName":safe_name}))
 }
 
@@ -704,7 +727,7 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let folder=instance_folder(&name)?;
     std::fs::create_dir_all(&folder).map_err(|e|format!("Could not create instance folder: {e}"))?;
     ensure_free_space(&folder,archive_size.unwrap_or(0).saturating_add(512*1024*1024))?;
-    std::fs::write(folder.join(".nova-installing"),std::process::id().to_string()).map_err(|e|format!("Could not mark the modpack installation: {e}"))?;
+    claim_install_marker(&folder)?;
     let archive_path=folder.join(".modrinth-pack.zip");
     emit_pack_progress(&app,"archive",0,0,"Downloading Modrinth archive");
     download_to_file(download_url,&archive_path,&app,&name,"archive","Downloading Modrinth archive",archive_size,archive_sha1).await
@@ -912,7 +935,11 @@ fn list_instances() -> Result<Value,String> {
         let path=folder.join("nova-instance.json");
         if marker.exists()&&!path.exists(){
             let installer_pid=std::fs::read_to_string(&marker).ok().and_then(|value|value.trim().parse::<u32>().ok());
-            let stale=installer_pid.map(|pid|!process_is_running(pid)).unwrap_or(true);
+            let stale=match installer_pid{
+                Some(pid)=>!process_is_running(pid),
+                None=>std::fs::metadata(&marker).and_then(|metadata|metadata.modified()).ok()
+                    .and_then(|modified|modified.elapsed().ok()).is_some_and(|age|age>Duration::from_secs(600))
+            };
             if stale { let _=std::fs::remove_dir_all(&folder); }
             continue;
         }
