@@ -404,7 +404,7 @@ function LogViewer({ text: raw, maxHeight=260 }) {
   </div>;
 }
 
-function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateError, updaterLogs, refreshUpdaterLogs, onCheckUpdates, onInstallUpdate }) {
+function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateError, onCheckUpdates, onInstallUpdate }) {
   return <section className="local-instances">
     <div className="eyebrow">NOVA PREFERENCES</div><h2>Launcher settings</h2>
     <p>Choose how much memory NOVA gives Minecraft when it launches. The setting is saved on this PC.</p>
@@ -422,9 +422,6 @@ function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateErr
       <p>{updateInfo ? (updateInfo.available ? "Version "+updateInfo.latestVersion+" is available. Your current version is "+updateInfo.currentVersion+"." : (updateInfo.releasePublished === false ? "NOVA has not published its first release yet. Automatic updates will activate after a release is published." : "You're running the latest published version ("+updateInfo.currentVersion+").")) : "Check GitHub for the latest official NOVA release."}</p>
       {updateInfo?.available && <div className="catalog-note"><b>Release notes</b><p style={{whiteSpace:"pre-wrap",marginTop:8}}>{updateInfo.releaseNotes}</p></div>}
       {updateError && <div className="catalog-note error">{updateError}</div>}
-      <div className="section-heading"><div><div className="eyebrow">DIAGNOSTICS</div><h2>Updater logs</h2></div><button className="secondary-btn" onClick={refreshUpdaterLogs}>Refresh logs</button></div>
-      <pre className="catalog-note" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:240,overflowY:"auto",fontSize:12,lineHeight:1.6}}>{updaterLogs}</pre>
-      <span className="feature-status">LOG FILE: %LOCALAPPDATA%\NOVA Client\logs\updater.log</span>
       <div className="pack-install-row">
         <button className="secondary-btn" onClick={onCheckUpdates} disabled={updateBusy}>{updateBusy?"Checking…":"Check for updates"}</button>
         {updateInfo?.available && <button className="primary-btn" onClick={onInstallUpdate} disabled={updateBusy}><ArrowDownToLine size={14}/>{updateBusy?"Preparing update…":"Accept & restart"}</button>}
@@ -496,34 +493,27 @@ export default function App() {
     }).then(stop=>{if(alive)unlisten=stop;else stop();});
     return()=>{alive=false;unlisten?.();};
   },[]);
-
-  useEffect(() => { refreshUpdaterLogs(); }, []);
   useEffect(() => {
     let alive = true;
     invoke("check_for_updates").then(info => { if (alive) { setUpdateInfo(info); setUpdateError(""); } })
       .catch(error => { if (alive) setUpdateError(typeof error === "string" ? error : (error.message || "Could not check for updates.")); });
     return () => { alive = false; };
   }, []);
-  const refreshUpdaterLogs = async () => {
-    try { setUpdaterLogs(await invoke("get_updater_logs")); }
-    catch (error) { setUpdaterLogs(typeof error === "string" ? error : (error.message || "Could not load updater logs.")); }
-  };
   const handleCheckUpdates = async () => {
     setUpdateBusy(true); setUpdateError("");
     try { setUpdateInfo(await invoke("check_for_updates")); }
     catch (error) { setUpdateError(typeof error === "string" ? error : (error.message || "Could not check for updates.")); }
-    finally { setUpdateBusy(false); refreshUpdaterLogs(); }
+    finally { setUpdateBusy(false); }
   };
   const handleInstallUpdate = async () => {
     setUpdateBusy(true); setUpdateError("");
     try { await invoke("install_update"); }
-    catch (error) { setUpdateError(typeof error === "string" ? error : (error.message || "Could not install the update.")); setUpdateBusy(false); refreshUpdaterLogs(); }
+    catch (error) { setUpdateError(typeof error === "string" ? error : (error.message || "Could not install the update.")); setUpdateBusy(false); }
   };
   const [launching, setLaunching] = useState(false);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState("");
-  const [updaterLogs, setUpdaterLogs] = useState("Loading updater logs…");
   const [signedIn, setSignedIn] = useState(false);
   const [accountName, setAccountName] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
@@ -588,7 +578,7 @@ export default function App() {
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle} onShowDownloads={()=>{if(installDialog){setDownloadToastVisible(true);setDownloadDetailsOpen(true);}}}/>{updateInfo?.available && <div role="alert" style={{margin:"16px 28px 0",padding:"14px 18px",border:"1px solid rgba(100,160,255,.32)",borderRadius:14,background:"linear-gradient(110deg,rgba(45,105,190,.20),rgba(24,42,72,.72))",display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:12,minWidth:220}}><div className="feature-icon blue"><ArrowDownToLine size={18}/></div><div><b style={{display:"block"}}>Update available · NOVA {updateInfo.latestVersion}</b><span style={{fontSize:12,opacity:.78}}>Accept to install the update and restart the launcher.</span></div></div><button className="primary-btn" onClick={handleInstallUpdate} disabled={updateBusy}><ArrowDownToLine size={14}/>{updateBusy?"Downloading update…":"Accept & restart"}</button></div>}<div className="page-content">{page === "home" && <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/>}<div style={{display:page==="mods"?"block":"none"}}><Catalog packs={false} active={page==="mods"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div><div style={{display:page==="modpacks"?"block":"none"}}><Catalog packs={true} active={page==="modpacks"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div>{page === "instances" && <LocalInstances versions={versions} memoryMb={memoryMb} setPage={setPage}/>}{page === "settings" && <SettingsPage memoryMb={memoryMb} setMemoryMb={setMemoryMb} updateInfo={updateInfo} updateBusy={updateBusy} updateError={updateError} updaterLogs={updaterLogs} refreshUpdaterLogs={refreshUpdaterLogs} onCheckUpdates={handleCheckUpdates} onInstallUpdate={handleInstallUpdate}/>}{page === "pvp" && <PvpPage/>}{!["home","mods","modpacks","instances","settings","pvp"].includes(page) && <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main>{installDialog&&downloadToastVisible&&<aside className="nova-download-toast" role="status" aria-live="polite">
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle} onShowDownloads={()=>{if(installDialog){setDownloadToastVisible(true);setDownloadDetailsOpen(true);}}}/>{updateInfo?.available && <div role="alert" style={{margin:"16px 28px 0",padding:"14px 18px",border:"1px solid rgba(100,160,255,.32)",borderRadius:14,background:"linear-gradient(110deg,rgba(45,105,190,.20),rgba(24,42,72,.72))",display:"flex",alignItems:"center",justifyContent:"space-between",gap:16,flexWrap:"wrap"}}><div style={{display:"flex",alignItems:"center",gap:12,minWidth:220}}><div className="feature-icon blue"><ArrowDownToLine size={18}/></div><div><b style={{display:"block"}}>Update available · NOVA {updateInfo.latestVersion}</b><span style={{fontSize:12,opacity:.78}}>Accept to install the update and restart the launcher.</span></div></div><button className="primary-btn" onClick={handleInstallUpdate} disabled={updateBusy}><ArrowDownToLine size={14}/>{updateBusy?"Downloading update…":"Accept & restart"}</button></div>}<div className="page-content">{page === "home" && <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/>}<div style={{display:page==="mods"?"block":"none"}}><Catalog packs={false} active={page==="mods"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div><div style={{display:page==="modpacks"?"block":"none"}}><Catalog packs={true} active={page==="modpacks"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div>{page === "instances" && <LocalInstances versions={versions} memoryMb={memoryMb} setPage={setPage}/>}{page === "settings" && <SettingsPage memoryMb={memoryMb} setMemoryMb={setMemoryMb} updateInfo={updateInfo} updateBusy={updateBusy} updateError={updateError} onCheckUpdates={handleCheckUpdates} onInstallUpdate={handleInstallUpdate}/>}{page === "pvp" && <PvpPage/>}{!["home","mods","modpacks","instances","settings","pvp"].includes(page) && <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main>{installDialog&&downloadToastVisible&&<aside className="nova-download-toast" role="status" aria-live="polite">
     <div className="nova-download-toast-head"><div className={"nova-download-toast-icon"+(installDialog.done?(installDialog.error?" failed":" complete"):"")}><ArrowDownToLine size={17}/></div><div className="nova-download-toast-heading"><b>{installDialog.name}</b><span>{installDialog.done?(installDialog.error?"Installation failed":"Download complete"):installDialog.status||"Downloading files"}</span></div><button className="nova-download-toast-close" title="Hide notification (download continues)" onClick={()=>{setDownloadToastDismissed(true);setDownloadToastVisible(false);}}><X size={15}/></button></div>
     <div className="nova-download-toast-track"><div className={"nova-download-toast-fill"+(!installDialog.done?" active":"")+(installDialog.error?" failed":"")} style={{width:(installDialog.done?100:(typeof installDialog.progress==="number"?installDialog.progress:34))+"%"}}/></div>
     <div className="nova-download-toast-foot"><span>{typeof installDialog.progress==="number"?installDialog.progress+"%":installDialog.done?"Finished":"Working in background"}</span><button onClick={()=>setDownloadDetailsOpen(v=>!v)}>{downloadDetailsOpen?"Hide details":"Details"}</button></div>
