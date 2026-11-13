@@ -869,7 +869,14 @@ async fn install_mod_to_instance_inner(
     if !download_url.starts_with("https://") {
         return Err("The mod source supplied a non-HTTPS download URL; it was blocked.".into());
     }
-    if filename.contains('/') || filename.contains('\\') {
+    let expected_size = expected_size
+        .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+        .ok_or("The mod source did not provide a valid file size; installation was stopped.")?;
+    let expected_sha1 = expected_sha1
+        .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+        .ok_or("The mod source did not provide a valid SHA-1 checksum; installation was stopped.")?;
+    let safe_path = safe_relative_path(&filename)?;
+    if safe_path.components().count() != 1 {
         return Err("The selected mod filename contains an invalid path.".into());
     }
     let safe_filename = Path::new(&filename).file_name().and_then(|s| s.to_str())
