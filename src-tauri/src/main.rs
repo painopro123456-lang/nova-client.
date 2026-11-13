@@ -812,3 +812,36 @@ fn main() {
         .run(tauri::generate_context!())
         .expect("error while running NOVA Client");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn memory_limits_are_validated() {
+        assert_eq!(normalize_memory(Some("8G".into())).unwrap(), "8G");
+        assert_eq!(normalize_memory(None).unwrap(), "4G");
+        assert!(normalize_memory(Some("0G".into())).is_err());
+        assert!(normalize_memory(Some("33G".into())).is_err());
+        assert!(normalize_memory(Some("lots".into())).is_err());
+    }
+
+    #[test]
+    fn instance_names_are_sanitized() {
+        assert_eq!(safe_instance_name("My Pack_1").unwrap(), "MyPack_1");
+        assert!(safe_instance_name("///").is_err());
+    }
+
+    #[test]
+    fn archive_paths_reject_traversal() {
+        assert!(safe_relative_path("mods/example.jar").is_ok());
+        assert!(safe_relative_path("../outside.jar").is_err());
+        assert!(safe_relative_path("C:/outside.jar").is_err());
+    }
+
+    #[test]
+    fn oauth_state_query_is_extracted() {
+        assert_eq!(query_parameter("/?code=abc&state=expected", "state"), Some("expected".into()));
+        assert_eq!(query_parameter("/?code=abc", "state"), None);
+    }
+}
