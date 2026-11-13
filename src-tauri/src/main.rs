@@ -910,6 +910,15 @@ async fn install_mod_to_instance_inner(
 }
 
 
+fn modrinth_minecraft_version(index: &Value, version: &Value) -> Result<String, String> {
+    index["dependencies"]["minecraft"]["version"].as_str()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| version["game_versions"].as_array()
+            .and_then(|versions| versions.iter().filter_map(Value::as_str).find(|value| !value.trim().is_empty())))
+        .map(str::to_owned)
+        .ok_or_else(|| "This Modrinth pack does not declare a Minecraft version, and Modrinth's version metadata does not provide one either.".to_string())
+}
+
 #[tauri::command]
 async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
@@ -954,8 +963,10 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     if index["formatVersion"].as_u64() != Some(1) {
         return Err("This Modrinth modpack format is not supported.".into());
     }
-    let mc_version = index["dependencies"]["minecraft"]["version"].as_str()
-        .ok_or("Modrinth pack does not specify a Minecraft version.")?.to_owned();
+    // Some exported Modrinth packs omit dependencies.minecraft. In that case,
+    // use the selected Modrinth version's game_versions metadata as the source
+    // of truth instead of rejecting an otherwise valid pack.
+    let mc_version = modrinth_minecraft_version(&index, latest)?;
     let loader_entry = ["fabric-loader", "forge", "neoforge", "quilt-loader", "legacy-fabric"]
         .iter().find_map(|key| index["dependencies"][*key].as_str().map(|v| (*key, v)));
     let (loader, loader_build) = if let Some((key, build)) = loader_entry {
@@ -1310,7 +1321,29 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{curseforge_loader_matches, safe_instance_name, safe_relative_path, InstanceReservation, TEMP_FILE_COUNTER};
+    use super::{curseforge_loader_matches, modrinth_minecraft_version, safe_instance_name, safe_relative_path, InstanceReservation, TEMP_FILE_COUNTER};
+    use serde_json::json;
+
+    #[test]
+    fn modrinth_minecraft_version_prefers_manifest_dependency() {
+        let index = json!({"dependencies":{"minecraft":{"version":"1.21.1"}}});
+        let version = json!({"game_versions":["1.20.1"]});
+        assert_eq!(modrinth_minecraft_version(&index, &version).unwrap(), "1.21.1");
+    }
+
+    #[test]
+    fn modrinth_minecraft_version_falls_back_to_selected_version_metadata() {
+        let index = json!({"dependencies":{}});
+        let version = json!({"game_versions":["1.21.4","1.21.3"]});
+        assert_eq!(modrinth_minecraft_version(&index, &version).unwrap(), "1.21.4");
+    }
+
+    #[test]
+    fn modrinth_minecraft_version_rejects_missing_metadata() {
+        let index = json!({"dependencies":{}});
+        let version = json!({"game_versions":[]});
+        assert!(modrinth_minecraft_version(&index, &version).is_err());
+    }
 
     #[test]
     fn atomic_write_replaces_existing_metadata_on_windows() {
