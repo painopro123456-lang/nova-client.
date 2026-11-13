@@ -141,7 +141,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NOVA-Client-Windows-Installer
-          path: D:/a/nova-src\\src-tauri\\target\\release\\bundle\\nsis\\NOVA-Client-Setup.exe
+          path: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe
           if-no-files-found: error
           retention-days: 14
       - name: Publish versioned GitHub release
