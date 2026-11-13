@@ -1,16 +1,19 @@
 # NOVA Client
 
-A Windows-first Minecraft Java client and launcher focused on a fast native shell, polished interface, PvP tools, and straightforward instance management.
+NOVA Client is a Windows-first Minecraft Java launcher built with React, Vite, Tauri 2 and Rust.
 
-## Current status
+## Current implementation
 
-This repository starts the NOVA desktop application foundation. The current milestone is the launcher UI and project structure; Minecraft authentication, asset/version installation, process launching, mod services, and update delivery are not implemented yet.
+- Microsoft browser sign-in using authorization code + PKCE; account credentials are stored with the operating system credential manager.
+- Minecraft version discovery and launch preparation through the Rust launcher backend.
+- Modrinth and CurseForge catalog search.
+- Modrinth and CurseForge modpack version selection, download, instance preparation and launch.
+- Per-instance metadata stored on disk so installed instances can be rediscovered after launcher storage is cleared.
+- A Fabric 26.2 client mod with an early in-game NOVA menu. The module catalogue is still a prototype; most module toggles do not yet implement gameplay/HUD features.
 
-## Stack
+## Known limitations
 
-- React + Vite for the interface
-- Tauri 2 + Rust for the native Windows desktop shell
-- TypeScript-ready component structure (JavaScript in the first UI milestone)
+This project is under active development. Download progress is currently file/phase based rather than byte-accurate, cancellation is not implemented, and some settings and PvP screens remain incomplete. A CurseForge API credential compiled into a desktop executable is extractable by anyone who can inspect that executable; private distribution reduces exposure but does not make a client-embedded secret secure. A production deployment should proxy CurseForge requests through a controlled service.
 
 ## Development
 
@@ -19,16 +22,18 @@ npm install
 npm run dev
 ```
 
-To build the desktop app after installing the Rust toolchain and Tauri prerequisites:
+Build the Windows desktop application after installing the Rust toolchain and Tauri prerequisites:
 
 ```bash
 npm run tauri dev
 npm run tauri build
 ```
 
-## Design principles
+The Windows GitHub Actions workflow produces `NOVA-Client-Setup.exe`. The workflow runs on `main` and on `fix/**` branches so repair branches can be validated before merging.
 
-- Windows 10/11 and Minecraft Java Edition first
-- Keep the native shell lightweight; avoid bundling a full browser runtime
-- Make every navigation destination usable and clearly distinguish implemented features from planned integrations
-- Never collect or store Microsoft passwords; authentication will use Microsoft's supported OAuth flow
+## Safety principles
+
+- Never collect or store Microsoft passwords.
+- Validate downloaded archive paths, sizes and hashes before treating a modpack as installed.
+- Preserve separate instance folders and prevent deletion while a game process is running.
+- Clearly label prototype features instead of presenting visual-only controls as functional modules.
