@@ -584,12 +584,43 @@ async fn download_pack_archive(app: &tauri::AppHandle, url: &str, destination: &
         }
         file.flush().await.map_err(|e| format!("Could not flush downloaded archive: {e}"))?;
         drop(file);
-        std::fs::rename(&temporary, destination)
+        replace_file(&temporary, destination)
             .map_err(|e| format!("Could not finalize downloaded archive: {e}"))?;
         Ok(())
     }.await;
     if result.is_err() { let _ = tokio::fs::remove_file(&temporary).await; }
     result
+}
+
+// Windows std::fs::rename does not replace an existing destination. Move the
+// previous file aside first, install the completed temporary file, and restore
+// the previous file if the final move fails.
+fn replace_file(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+    let parent = destination.parent().ok_or_else(|| std::io::Error::new(
+        std::io::ErrorKind::InvalidInput, "destination has no parent folder"
+    ))?;
+    if !destination.exists() {
+        return std::fs::rename(source, destination);
+    }
+    let file_name = destination.file_name().and_then(|n| n.to_str()).unwrap_or("download");
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let backup = parent.join(format!(".{file_name}.{}.{sequence}.backup", std::process::id()));
+    std::fs::rename(destination, &backup)?;
+    match std::fs::rename(source, destination) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(backup);
+            Ok(())
+        }
+        Err(error) => {
+            if let Err(restore_error) = std::fs::rename(&backup, destination) {
+                return Err(std::io::Error::new(
+                    error.kind(),
+                    format!("{error}; additionally could not restore previous file: {restore_error}")
+                ));
+            }
+            Err(error)
+        }
+    }
 }
 
 fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -599,7 +630,7 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
     let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let temporary = parent.join(format!(".{file_name}.{}.{sequence}.partial", std::process::id()));
     std::fs::write(&temporary, bytes).map_err(|e| format!("Could not write temporary download: {e}"))?;
-    if let Err(error) = std::fs::rename(&temporary, destination) {
+    if let Err(error) = replace_file(&temporary, destination) {
         let _ = std::fs::remove_file(&temporary);
         return Err(format!("Could not finalize downloaded file: {error}"));
     }
@@ -679,7 +710,7 @@ async fn download_pack_file(app: &tauri::AppHandle, url: &str, destination: &Pat
                 return Err("A mod file failed its SHA-1 integrity check.".into());
             }
         }
-        std::fs::rename(&temporary, destination)
+        replace_file(&temporary, destination)
             .map_err(|e| format!("Could not finalize downloaded mod: {e}"))?;
         Ok(())
     }.await;
@@ -1247,6 +1278,21 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::{curseforge_loader_matches, safe_instance_name, safe_relative_path, InstanceReservation, TEMP_FILE_COUNTER};
+
+    #[test]
+    fn atomic_write_replaces_existing_metadata_on_windows() {
+        let root = std::env::temp_dir().join(format!(
+            "nova-atomic-write-test-{}-{}",
+            std::process::id(),
+            TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("nova-instance.json");
+        std::fs::write(&target, b"old metadata").unwrap();
+        super::atomic_write(&target, b"new metadata").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new metadata");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn instance_names_strip_unsafe_characters() {
