@@ -18,12 +18,12 @@ const navGroups = [
 ];
 
 
-function Sidebar({ page, setPage, signedIn, accountName }) {
+function Sidebar({ page, setPage, signedIn, accountName, onSignOut }) {
   return <aside className="sidebar">
     <div className="brand"><div className="brand-mark"><Moon size={19}/></div><div><b>NOVA</b><span>CLIENT</span></div><span className="build-tag">BETA</span></div>
     <div className="profile-card"><div className="avatar">N</div><div className="profile-copy"><b>{signedIn ? (accountName || "Microsoft account") : "Guest profile"}</b><span>{signedIn ? "Minecraft account connected" : "Sign in to continue"}</span></div><ChevronDown size={15}/></div>
     <nav>{navGroups.map(group => <section className="nav-group" key={group.label}><div className="nav-label">{group.label}</div>{group.items.map(item => <button key={item.id} className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => setPage(item.id)}><item.icon size={17}/><span>{item.label}</span>{item.id === "pvp" && <span className="nav-dot"/>}</button>)}</section>)}</nav>
-    <div className="sidebar-bottom"><div className="status-line"><span className="status-pulse"/><span>Launcher UI preview</span></div><button className="help-link" onClick={() => setPage("settings")}><CircleHelp size={16}/> Help & support</button><div className="sidebar-foot">NOVA CLIENT <span>0.1.0</span></div></div>
+    <div className="sidebar-bottom"><div className="status-line"><span className="status-pulse"/><span>Launcher UI preview</span></div>{signedIn && <button className="help-link" onClick={onSignOut}>Sign out of Microsoft</button>}<button className="help-link" onClick={() => setPage("settings")}><CircleHelp size={16}/> Help & support</button><div className="sidebar-foot">NOVA CLIENT <span>0.1.0</span></div></div>
   </aside>;
 }
 
@@ -62,6 +62,7 @@ function Catalog({ packs }) {
   const [q,setQ]=useState("");
   const [provider,setProvider]=useState("modrinth");
   const [hits,setHits]=useState([]);
+  const [hasNext,setHasNext]=useState(false);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [page,setPage]=useState(0);
@@ -80,17 +81,20 @@ function Catalog({ packs }) {
       setBusy(true); setError(""); setHits([]);
       try {
         let results=[];
+        let moreAvailable=false;
         if(provider==="modrinth") {
           const p=new URLSearchParams({query:q,facets:JSON.stringify([[packs?"project_type:modpack":"project_type:mod"]]),limit:"24",offset:String(page*24)});
           const r=await fetch("https://api.modrinth.com/v2/search?"+p,{signal:ctrl.signal});
           if(!r.ok) throw new Error("Modrinth catalog request failed");
           const data=await r.json();
           results=(data.hits||[]).map(x=>({id:x.project_id,title:x.title,description:x.description,downloads:x.downloads,image:x.icon_url,url:"https://modrinth.com/"+(packs?"modpack/":"mod/")+x.slug}));
+          moreAvailable=Number(data.total_hits||0)>(page*24+results.length);
         } else {
           const data=await invoke("curseforge_search",{query:q,packs,index:page*24,gameVersion:null});
           results=(data.data||[]).map(x=>({id:String(x.id),title:x.name,description:x.summary||"No description provided.",downloads:x.downloadCount,image:x.logo?.thumbnailUrl,url:x.links?.websiteUrl||"https://www.curseforge.com/minecraft/"+(packs?"modpacks":"mc-mods")+"/"+x.slug}));
+          moreAvailable=Number(data.pagination?.totalCount||0)>(page*24+results.length);
         }
-        if(!ctrl.signal.aborted) setHits(results);
+        if(!ctrl.signal.aborted) { setHits(results); setHasNext(moreAvailable); }
       } catch(e) { if(!ctrl.signal.aborted) setError(typeof e==="string"?e:(e.message||"Unable to load catalog. Check your connection and retry.")); }
       finally { if(!ctrl.signal.aborted) setBusy(false); }
     },250);
@@ -232,7 +236,7 @@ function Catalog({ packs }) {
           : <><label className="pack-version-label" htmlFor="pack-version-select">MODPACK VERSION</label><select id="pack-version-select" className="pack-version-select" value={selectedPackVersion} onChange={e=>setSelectedPackVersion(e.target.value)}>{packVersions.map(v=><option key={v.id} value={v.id}>{v.label}</option>)}</select><div className="pack-version-meta">{packVersions.find(v=>v.id===selectedPackVersion)?.published ? "Published "+new Date(packVersions.find(v=>v.id===selectedPackVersion).published).toLocaleDateString() : "Latest versions are listed first"}</div><div className="pack-version-actions"><button className="secondary-btn" onClick={()=>setVersionProject(null)}>Cancel</button><button className="primary-btn" onClick={installPack} disabled={!selectedPackVersion}><ArrowDownToLine size={14}/> Install selected version</button></div></>}
       </section>
     </div>}
-    <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||hits.length===0} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
+    <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||!hasNext} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
   </section>;
 }
 function LocalInstances({ versions }) {
@@ -279,6 +283,16 @@ export default function App() {
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginUrl, setLoginUrl] = useState("");
   const [message, setMessage] = useState("");
+  const handleSignOut = async () => {
+    try {
+      await invoke("sign_out_minecraft");
+      setSignedIn(false);
+      setAccountName("");
+      setMessage("You have been signed out of your Microsoft account.");
+    } catch (error) {
+      setMessage(typeof error === "string" ? error : (error.message || "Could not sign out."));
+    }
+  };
   useEffect(() => {
     let alive = true;
     invoke("minecraft_versions").then(manifest => {
@@ -328,5 +342,5 @@ export default function App() {
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances versions={versions}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances versions={versions}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
