@@ -164,7 +164,7 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
         if(previous?.instanceName&&previous.instanceName!==metadata.instanceName){
           try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new pack. */}
         }
-        if(project.image){setPackIcons(old=>{const next={...old,[metadata.instanceName]:project.image};try{localStorage.setItem("nova.packIcons",JSON.stringify(next));}catch{}return next;});}
+        if(project.image){try{const icons=JSON.parse(localStorage.getItem("nova.packIcons")||"{}");icons[metadata.instanceName]=project.image;localStorage.setItem("nova.packIcons",JSON.stringify(icons));}catch{}}
       setInstalled(old=>({...old,[storageKey]:{...metadata,iconUrl:project.image||""}}));
         setInstallDialog({name:metadata.name||project.title,step:1,progress:100,status:"Modpack downloaded",detail:"All available modpack files are saved. Sign in with Microsoft only when you're ready to install Minecraft and play.",done:true,error:""});
         setPackActionMessage((metadata.name||project.title)+" downloaded. Microsoft sign-in is only needed to prepare and launch Minecraft.");
@@ -176,7 +176,7 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
       if(previous?.instanceName&&previous.instanceName!==metadata.instanceName){
         try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new working install. */}
       }
-      if(project.image){setPackIcons(old=>{const next={...old,[metadata.instanceName]:project.image};try{localStorage.setItem("nova.packIcons",JSON.stringify(next));}catch{}return next;});}
+      if(project.image){try{const icons=JSON.parse(localStorage.getItem("nova.packIcons")||"{}");icons[metadata.instanceName]=project.image;localStorage.setItem("nova.packIcons",JSON.stringify(icons));}catch{}}
       setInstalled(old=>({...old,[storageKey]:{...metadata,iconUrl:project.image||""}}));
       setInstallDialog({name:metadata.name||project.title,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""});
       setPackActionMessage((metadata.name||project.title)+" is fully installed and ready to play.");
