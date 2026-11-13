@@ -143,6 +143,13 @@ function Catalog({ packs, memoryMax, onNavigate }) {
     return()=>{alive=false;unlisten?.();};
   },[modInstallBusy]);
 
+  const cancelModInstall=async()=>{
+    try{
+      await invoke("cancel_modpack_install",{instanceName:targetInstance});
+      setModInstallMessage("Cancelling mod installation…");
+    }catch(error){setModInstallMessage(typeof error==="string"?error:(error.message||"Could not cancel this installation."));}
+  };
+
   const choosePackVersion=async(project)=>{
     setVersionProject(project);setPackVersions([]);setSelectedPackVersion("");setPackVersionsBusy(true);setPackActionMessage("");
     try{
@@ -232,7 +239,7 @@ function Catalog({ packs, memoryMax, onNavigate }) {
     {busy&&<div className="catalog-state"><div className="loading-orbit"/><b>Finding great projects</b><span>Searching {provider==="modrinth"?"Modrinth":"CurseForge"}…</span></div>}
     {error&&<div className="catalog-note error"><CircleHelp size={16}/><span>{error}</span></div>}
     {packActionMessage&&packs&&<div className="catalog-note"><span>{packActionMessage}</span></div>}
-    {modInstallMessage&&!packs&&<div className="catalog-note"><span>{modInstallMessage}{modInstallProgress?.detail?" · "+modInstallProgress.detail:""}{typeof modInstallProgress?.percent==="number"?" · "+modInstallProgress.percent+"%":""}</span>{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
+    {modInstallMessage&&!packs&&<div className="catalog-note"><span>{modInstallMessage}{modInstallProgress?.detail?" · "+modInstallProgress.detail:""}{typeof modInstallProgress?.percent==="number"?" · "+modInstallProgress.percent+"%":""}</span>{modInstallBusy&&<button className="text-button" onClick={cancelModInstall}>Cancel</button>}{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
     {!busy&&!error&&hits.length===0&&<div className="catalog-state"><div className="empty-library"><Blocks size={25}/></div><b>No projects found</b><span>Try another search or switch catalog source.</span></div>}
     {!busy&&hits.length>0&&<div className="catalog-results-label"><span>{hits.length} PROJECTS ON THIS PAGE</span><span>PAGE {String(page+1).padStart(2,"0")}</span></div>}
     <div className="catalog-grid">{hits.map((x,i)=><article className="catalog-card" key={x.id}>
