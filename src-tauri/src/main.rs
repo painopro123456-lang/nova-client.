@@ -113,6 +113,64 @@ fn get_game_logs(instance_name: Option<String>) -> Result<Value, String> {
     }))
 }
 
+#[cfg(windows)]
+fn safe_minecraft_memory_mb(requested: u32) -> u32 {
+    use winapi::um::sysinfoapi::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    if ok == 0 {
+        return requested.clamp(1024, 2048);
+    }
+    let mib = 1024 * 1024;
+    let total_mb = (status.ullTotalPhys / mib) as u32;
+    let available_mb = (status.ullAvailPhys / mib) as u32;
+    // Keep at least half of physical RAM for Windows, drivers and background apps,
+    // and avoid allocating memory that is not currently available.
+    let total_limit = (total_mb / 2).max(1024);
+    let available_limit = available_mb.saturating_sub(1024).max(1024);
+    requested.clamp(1024, total_limit.min(available_limit).min(8192))
+}
+
+#[cfg(not(windows))]
+fn safe_minecraft_memory_mb(requested: u32) -> u32 {
+    requested.clamp(1024, 8192)
+}
+
+fn log_latest_crash_report(game_root: &Path, instance_name: Option<&str>) {
+    let mut directories = Vec::new();
+    if let Some(name) = instance_name {
+        if let Ok(name) = safe_instance_name(name) {
+            directories.push(game_root.join("instances").join(name).join("crash-reports"));
+        }
+    }
+    directories.push(game_root.join("crash-reports"));
+    let newest = directories.iter().filter_map(|directory| {
+        std::fs::read_dir(directory).ok()?.flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if !path.is_file() || !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt")) {
+                    return None;
+                }
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((modified, path))
+            })
+            .max_by_key(|(modified, _)| *modified)
+    }).max_by_key(|(modified, _)| *modified);
+    if let Some((_, path)) = newest {
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                let mut lines: Vec<&str> = contents.lines().rev().take(45).collect();
+                lines.reverse();
+                game_log(&format!("Minecraft crash report found at {}. Last report lines:\n{}", path.display(), lines.join("\n")));
+            }
+            Err(error) => game_log(&format!("Minecraft crash report exists at {}, but could not be read: {error}", path.display())),
+        }
+    } else {
+        game_log("Minecraft exited unsuccessfully, but no crash report was found in the instance or shared crash-reports folder.");
+    }
+}
+
 fn game_event_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
     let last_progress = Mutex::new(Instant::now() - Duration::from_secs(2));
     Arc::new(move |event| match event {
@@ -738,7 +796,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
     }
     // Modpack preparation installs files only; RAM allocation is applied when the
     // user launches the instance.
-    options.download_concurrency = 16;
+    options.download_concurrency = 6;
 
     game_log(&format!("Preparing modpack instance '{name}' for Minecraft {version} ({loader})."));
     let launch = Launch::new(options, account)
@@ -830,14 +888,19 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         options.loader.build = loader_build;
         options.loader.enable = true;
     }
-    let memory_mb = memory_mb.unwrap_or(4096);
-    if !(1024..=16384).contains(&memory_mb) {
+    let requested_memory_mb = memory_mb.unwrap_or(2048);
+    if !(1024..=16384).contains(&requested_memory_mb) {
         return Err("Memory allocation must be between 1024 MB and 16384 MB.".into());
     }
+    let memory_mb = safe_minecraft_memory_mb(requested_memory_mb);
+    options.memory.min = "512M".to_owned();
     options.memory.max = format!("{memory_mb}M");
+    game_log(&format!("Minecraft heap: requested {requested_memory_mb} MB, using {memory_mb} MB after checking system RAM."));
     options.download_concurrency = 16;
 
     game_log(&format!("Starting Minecraft {version} ({loader}) in profile '{}'.", instance_name.as_deref().unwrap_or("default")));
+    let crash_root = game_root.clone();
+    let crash_instance = instance_name.clone();
     let launch = Launch::new(options, account)
         .map_err(|e| format!("Could not prepare Minecraft: {e}"))?
         .with_events(game_event_logger());
@@ -860,6 +923,9 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
             }
         };
         game_log(&format!("Minecraft process exited: success={success}, exit_code={code:?}."));
+        if !success {
+            log_latest_crash_report(&crash_root, crash_instance.as_deref());
+        }
         let _ = app.emit("nova-game-exit", json!({"success":success,"code":code}));
     });
     Ok(())
