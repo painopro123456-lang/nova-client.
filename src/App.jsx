@@ -119,19 +119,28 @@ function Catalog({ packs }) {
   };
   const installPack=async()=>{
     if(!versionProject||!selectedPackVersion)return;
-    const project=versionProject,key=String(project.id);
-    const instanceName=(project.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,32)||"modpack")+"-"+Date.now().toString().slice(-6);
+    const project=versionProject;
+    const projectId=String(project.id);
+    const storageKey=provider+":"+projectId;
+    const uniqueSuffix=(typeof crypto!=="undefined"&&crypto.randomUUID)?crypto.randomUUID().slice(0,8):Math.random().toString(36).slice(2,10);
+    const instanceName=(project.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,24)||"modpack")+"-"+Date.now().toString(36)+"-"+uniqueSuffix;
     setInstallingId(key);
     setVersionProject(null);
     setInstallDialog({name:project.title,step:0,progress:8,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""});
     try{
       setInstallDialog({name:project.title,step:0,progress:12,status:"Downloading modpack",detail:"Getting the selected release and its manifest…",done:false,error:""});
       const metadata=provider==="modrinth"
-        ? await invoke("install_modrinth_modpack",{projectId:key,instanceName,versionId:selectedPackVersion})
-        : await invoke("install_curseforge_modpack",{modId:key,instanceName,fileId:Number(selectedPackVersion)});
-      setInstalled(old=>({...old,[key]:metadata}));
+        ? await invoke("install_modrinth_modpack",{projectId,instanceName,versionId:selectedPackVersion})
+        : await invoke("install_curseforge_modpack",{modId:projectId,instanceName,fileId:Number(selectedPackVersion)});
       setInstallDialog({name:metadata.name||project.title,step:1,progress:48,status:"Mod files downloaded",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""});
       await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName});
+      // Only expose a pack as installed after Minecraft and its loader are ready.
+      // Remove the previous isolated install only after the replacement is ready.
+      const previous=installed[storageKey];
+      if(previous?.instanceName&&previous.instanceName!==metadata.instanceName){
+        try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new working install even if stale cleanup fails. */}
+      }
+      setInstalled(old=>({...old,[storageKey]:metadata}));
       setInstallDialog({name:metadata.name||project.title,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""});
       setPackActionMessage((metadata.name||project.title)+" is fully installed and ready to play.");
     }catch(e){
@@ -179,8 +188,8 @@ function Catalog({ packs }) {
       <div className="project-card-top">{x.image?<img src={x.image} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<span className="project-source">{provider==="modrinth"?"MODRINTH":"CURSEFORGE"}</span><span className="project-rank">{String(page*24+i+1).padStart(2,"0")}</span></div>
       <h3>{x.title}</h3><p>{x.description}</p>
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
-      {packs&&<div className="pack-install-row">{installed[String(x.id)]
-        ? <button className="primary-btn" onClick={()=>launchPack(installed[String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Install & Play"}</button>
+      {packs&&<div className="pack-install-row">{installed[provider+":"+String(x.id)]
+        ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Install & Play"}</button>
         : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
     </article>)}</div>}
     {installDialog&&<div className="pack-version-backdrop install-progress-backdrop" role="presentation">
