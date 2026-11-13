@@ -646,6 +646,118 @@ fn save_instance_metadata(folder: &Path, metadata: Value) -> Result<Value, Strin
 }
 
 #[tauri::command]
+async fn install_mod_to_instance(
+    app: tauri::AppHandle,
+    provider: String,
+    project_id: String,
+    version_id: String,
+    instance_name: String,
+) -> Result<Value, String> {
+    let name = safe_instance_name(&instance_name)?;
+    if project_id.is_empty() || !project_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("The selected mod project ID is invalid.".into());
+    }
+    if version_id.is_empty() || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("The selected mod version ID is invalid.".into());
+    }
+    let folder = instance_folder(&name)?;
+    let metadata_path = folder.join("nova-instance.json");
+    let metadata_bytes = std::fs::read(&metadata_path)
+        .map_err(|_| "Choose an existing NOVA instance before installing a mod.".to_string())?;
+    let metadata: Value = serde_json::from_slice(&metadata_bytes)
+        .map_err(|_| "The selected instance metadata is damaged. Recreate the instance before installing mods.".to_string())?;
+    let minecraft_version = metadata["minecraftVersion"].as_str()
+        .ok_or("The selected instance has no Minecraft version.")?.to_owned();
+    let loader = metadata["loader"].as_str().unwrap_or("vanilla").to_owned();
+    if loader == "vanilla" {
+        return Err("This instance uses Vanilla. Create or choose a Fabric, Forge, NeoForge, or Quilt instance to install mods.".into());
+    }
+    let client = http_client()?;
+    let (download_url, filename, expected_size, expected_sha1, mod_title) = match provider.as_str() {
+        "modrinth" => {
+            let response: Value = client.get(format!("https://api.modrinth.com/v2/version/{version_id}"))
+                .send().await.map_err(|e| format!("Could not reach Modrinth: {e}"))?
+                .error_for_status().map_err(|e| format!("Modrinth could not find that mod version: {e}"))?
+                .json().await.map_err(|e| format!("Modrinth returned an unreadable mod version: {e}"))?;
+            if response["project_id"].as_str() != Some(project_id.as_str()) {
+                return Err("The selected Modrinth version does not belong to this project.".into());
+            }
+            let supported_versions = response["game_versions"].as_array().ok_or("Modrinth did not list compatible Minecraft versions.")?;
+            if !supported_versions.iter().any(|v| v.as_str() == Some(minecraft_version.as_str())) {
+                return Err(format!("This mod version does not support Minecraft {minecraft_version}."));
+            }
+            let loaders = response["loaders"].as_array().ok_or("Modrinth did not list compatible mod loaders.")?;
+            if !loaders.iter().any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(&loader))) {
+                return Err(format!("This mod version does not support the {} loader.", loader));
+            }
+            let file = response["files"].as_array()
+                .and_then(|files| files.iter().find(|f| f["primary"].as_bool() == Some(true)).or_else(|| files.first()))
+                .ok_or("Modrinth did not provide a downloadable mod file.")?;
+            (
+                file["url"].as_str().ok_or("Modrinth download URL is missing.")?.to_owned(),
+                file["filename"].as_str().ok_or("Modrinth file name is missing.")?.to_owned(),
+                file["size"].as_u64(),
+                file["hashes"]["sha1"].as_str().map(str::to_owned),
+                response["name"].as_str().unwrap_or("Mod").to_owned(),
+            )
+        },
+        "curseforge" => {
+            let mod_id: u64 = project_id.parse().map_err(|_| "The CurseForge project ID is invalid.")?;
+            let file_id: u64 = version_id.parse().map_err(|_| "The CurseForge file ID is invalid.")?;
+            let api_key = curseforge_api_key()?;
+            let mut headers = HeaderMap::new();
+            headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
+            headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+            let response: Value = client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}"))
+                .headers(headers.clone()).send().await.map_err(|e| format!("Could not reach CurseForge: {e}"))?
+                .error_for_status().map_err(|e| format!("CurseForge could not find that mod file: {e}"))?
+                .json().await.map_err(|e| format!("CurseForge returned an unreadable mod file: {e}"))?;
+            let file = &response["data"];
+            if file["modId"].as_u64() != Some(mod_id) {
+                return Err("The selected CurseForge file does not belong to this project.".into());
+            }
+            let versions = file["gameVersions"].as_array().ok_or("CurseForge did not list compatible game versions.")?;
+            if !versions.iter().any(|v| v.as_str() == Some(minecraft_version.as_str())) {
+                return Err(format!("This mod file does not list Minecraft {minecraft_version} as compatible."));
+            }
+            let url = if let Some(url) = file["downloadUrl"].as_str() {
+                url.to_owned()
+            } else {
+                client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}/download-url"))
+                    .headers(headers).send().await.map_err(|e| format!("Could not request the CurseForge download: {e}"))?
+                    .error_for_status().map_err(|e| format!("CurseForge did not provide a download URL: {e}"))?
+                    .json::<Value>().await.map_err(|e| format!("CurseForge download response was unreadable: {e}"))?["data"]
+                    .as_str().ok_or("CurseForge did not provide a download URL for this mod.")?.to_owned()
+            };
+            (
+                url,
+                file["fileName"].as_str().ok_or("CurseForge file name is missing.")?.to_owned(),
+                file["fileLength"].as_u64(),
+                None,
+                file["displayName"].as_str().unwrap_or("Mod").to_owned(),
+            )
+        },
+        _ => return Err("Choose Modrinth or CurseForge as the mod source.".into()),
+    };
+    if !download_url.starts_with("https://") {
+        return Err("The mod source supplied a non-HTTPS download URL; it was blocked.".into());
+    }
+    let safe_filename = Path::new(&filename).file_name().and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty() && s.to_ascii_lowercase().ends_with(".jar"))
+        .ok_or("The selected mod file is not a valid JAR filename.")?;
+    let mods_folder = folder.join("mods");
+    std::fs::create_dir_all(&mods_folder).map_err(|e| format!("Could not create instance mods folder: {e}"))?;
+    let destination = mods_folder.join(safe_filename);
+    if destination.exists() {
+        return Err(format!("A mod named '{safe_filename}' is already installed in this instance."));
+    }
+    emit_pack_progress(&app, "files", 0, 0, "Downloading selected mod");
+    download_pack_file(&app, &download_url, &destination, expected_size, expected_sha1.as_deref()).await?;
+    Ok(json!({"name":mod_title,"fileName":safe_filename,"instanceName":name,"minecraftVersion":minecraft_version,"loader":loader}))
+}
+
+
+#[tauri::command]
 async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let client = http_client()?;
@@ -981,6 +1093,7 @@ fn main() {
             install_modrinth_modpack,
             curseforge_modpack_versions,
             install_curseforge_modpack,
+            install_mod_to_instance,
             create_instance,
             list_instances,
             delete_instance
