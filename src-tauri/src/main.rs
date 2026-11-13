@@ -65,10 +65,25 @@ fn get_game_logs(instance_name: Option<String>) -> Result<Value, String> {
     let mut minecraft_sections = Vec::new();
     let mut minecraft_paths = Vec::new();
     if let Some(name) = instance_name.as_deref() {
-        let game_dir = root.join("instances").join(safe_instance_name(name)?);
-        let path = game_dir.join("logs").join("latest.log");
-        minecraft_sections.push(format!("=== {} ===\\n{}", name, tail_file(&path, 500)));
-        minecraft_paths.push(path.display().to_string());
+        let safe_name = safe_instance_name(name)?;
+        let game_dir = root.join("instances").join(&safe_name);
+        // Different launcher-core versions may resolve the instance game directory
+        // either under instances/<name> or the shared game root. Check both.
+        let candidates = [
+            game_dir.join("logs").join("latest.log"),
+            root.join("logs").join("latest.log"),
+        ];
+        let found = candidates.iter().find(|path| path.is_file()).cloned();
+        if let Some(path) = found {
+            minecraft_sections.push(format!("=== {} ===\n{}", name, tail_file(&path, 500)));
+            minecraft_paths.push(path.display().to_string());
+        } else {
+            let expected = candidates[0].display().to_string();
+            minecraft_sections.push(format!(
+                "No Minecraft log exists for this instance yet. Launch this modpack once, then open Logs again.\\nExpected file: {expected}"
+            ));
+            minecraft_paths.push(expected);
+        }
     } else {
         let default_log = root.join("logs").join("latest.log");
         if default_log.exists() {
