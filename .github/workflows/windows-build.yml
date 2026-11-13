@@ -43,7 +43,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: D:/a/nova-src
-        run: npm install
+        run: npm ci
 
       - name: Generate Windows app icon
         shell: pwsh
@@ -93,7 +93,7 @@ jobs:
         working-directory: D:/a/nova-src
         env:
           CARGO_TERM_COLOR: always
-        run: cargo test --manifest-path src-tauri/Cargo.toml
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
 
       - name: Build NOVA Windows installer (verbose)
         working-directory: D:/a/nova-src
