@@ -7,9 +7,11 @@ import net.minecraft.client.gui.screens.Screen;
 import com.mojang.blaze3d.platform.InputConstants;
 import org.lwjgl.glfw.GLFW;
 import net.minecraft.resources.Identifier;
+import net.fabricmc.fabric.api.client.rendering.v1.hud.HudElementRegistry;
 public final class NovaClient implements ClientModInitializer {
     private KeyMapping openMenuKey;
     @Override public void onInitializeClient() {
+        HudElementRegistry.addLast(Identifier.fromNamespaceAndPath("nova", "overlay"), NovaHud::render);
         KeyMapping.Category category = KeyMapping.Category.register(Identifier.fromNamespaceAndPath("nova", "main"));
         openMenuKey = KeyMappingHelper.registerKeyMapping(new KeyMapping("key.nova.open_menu", InputConstants.Type.KEYSYM, GLFW.GLFW_KEY_RIGHT_SHIFT, category));
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
