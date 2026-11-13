@@ -1,4 +1,8 @@
 name: NOVA In-Game Mod Build
+
+concurrency:
+  group: nova-mod-${{ github.ref }}
+  cancel-in-progress: true
 on:
   push:
     paths:
