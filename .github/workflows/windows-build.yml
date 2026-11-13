@@ -91,10 +91,24 @@ jobs:
           CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
         run: npm run tauri -- build --verbose
 
+      - name: Give installer a clean filename
+        shell: pwsh
+        working-directory: D:/a/nova-src
+        run: |
+          $installerDir = "src-tauri/target/release/bundle/nsis"
+          $installers = @(Get-ChildItem -Path $installerDir -Filter "*.exe" -File)
+          if ($installers.Count -ne 1) {
+            throw "Expected exactly one NSIS installer, found $($installers.Count)."
+          }
+          $target = Join-Path $installerDir "NOVA-Client-Setup.exe"
+          if ($installers[0].FullName -ne (Join-Path (Get-Location) $target)) {
+            Move-Item -LiteralPath $installers[0].FullName -Destination $target -Force
+          }
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
           name: NOVA-Client-Windows-Installer
-          path: D:/a/nova-src\\src-tauri\\target\\release\\bundle\\nsis\\*.exe
+          path: D:/a/nova-src\\src-tauri\\target\\release\\bundle\\nsis\\NOVA-Client-Setup.exe
           if-no-files-found: error
           retention-days: 14
