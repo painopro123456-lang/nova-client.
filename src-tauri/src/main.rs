@@ -605,12 +605,9 @@ fn replace_file(source: &Path, destination: &Path) -> Result<(), std::io::Error>
             Ok(())
         }
         Err(error) => {
-            if let Err(restore_error) = std::fs::rename(&backup, destination) {
-                return Err(std::io::Error::new(
-                    error.kind(),
-                    format!("{error}; additionally could not restore previous file: {restore_error}")
-                ));
-            }
+            // Keep the original failure as the returned error. If restoration also
+            // fails, the backup remains beside the destination for manual recovery.
+            let _ = std::fs::rename(&backup, destination);
             Err(error)
         }
     }
