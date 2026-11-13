@@ -276,8 +276,10 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
     write_callback_page(&mut callback_stream,"200 OK","Microsoft sign-in complete","You can close this tab and return to NOVA Client.")?;
     let account_json=serde_json::to_string(&account)
         .map_err(|e|format!("Could not prepare the signed-in account: {e}"))?;
+    let _refresh_guard=AUTH_REFRESH_LOCK.lock().await;
     credential_entry(MINECRAFT_ACCOUNT_USER)?.set_password(&account_json)
         .map_err(|e|format!("Could not securely save the Minecraft account: {e}"))?;
+    drop(_refresh_guard);
     app.emit("nova-login-complete",account.name.clone())
         .map_err(|e|format!("Signed in, but could not update NOVA: {e}"))?;
     Ok(account.name)
@@ -298,7 +300,8 @@ fn minecraft_account_name() -> Result<Option<String>, String> {
 }
 
 #[tauri::command]
-fn sign_out_minecraft() -> Result<(), String> {
+async fn sign_out_minecraft() -> Result<(), String> {
+    let _refresh_guard=AUTH_REFRESH_LOCK.lock().await;
     match credential_entry(MINECRAFT_ACCOUNT_USER)?.delete_credential() {
         Ok(()) => Ok(()),
         Err(keyring::Error::NoEntry) => Ok(()),
@@ -408,6 +411,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String, 
     emit_pack_progress(&app, "preparing", 0, 0, "Preparing Minecraft, Java and mod loader");
     // Preparing a modpack installs Minecraft, Java, libraries, assets and its loader
     // into the selected instance without starting the game.
+    let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
     let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
         .get_password()
         .map_err(|_| "Sign in with Microsoft before completing the modpack installation.".to_string())?;
@@ -415,7 +419,6 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String, 
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
     let auth = Authenticator::new()
         .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
-    let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
     let account = auth.refresh(&saved_account).await
         .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
     let refreshed_json = serde_json::to_string(&account)
@@ -510,6 +513,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         return Err(format!("Minecraft version '{version}' was not found in Mojang's official version list. Refresh the version list and try again."));
     }
 
+    let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
     let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
         .get_password()
         .map_err(|_| "Sign in with your Microsoft account before launching Minecraft.".to_string())?;
@@ -517,7 +521,6 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
     let auth = Authenticator::new()
         .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
-    let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
     let account = auth.refresh(&saved_account).await
         .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
     let refreshed_json = serde_json::to_string(&account)
