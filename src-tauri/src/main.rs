@@ -1404,6 +1404,62 @@ async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
+// Only use cross-platform mirrors that are explicitly mapped and verified against
+// CurseForge's own file metadata. Never guess a Modrinth project from a display name.
+async fn resolve_verified_modrinth_fallback(
+    client: &reqwest::Client,
+    curseforge_project: u64,
+    filename: &str,
+    minecraft_version: &str,
+    loader: &str,
+    expected_sha1: &str,
+) -> Result<Option<String>, String> {
+    let modrinth_project = match curseforge_project {
+        448233 => "entityculling",
+        _ => return Ok(None),
+    };
+    if !loader.eq_ignore_ascii_case("fabric") {
+        return Ok(None);
+    }
+    let response = match client
+        .get(format!("https://api.modrinth.com/v2/project/{modrinth_project}/version"))
+        .header(reqwest::header::USER_AGENT, "NOVA-Client/0.1.1 (modpack downloader)")
+        .send().await
+    {
+        Ok(response) if response.status().is_success() => response,
+        _ => return Ok(None),
+    };
+    let versions: Value = match response.json().await {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let Some(versions) = versions.as_array() else { return Ok(None); };
+    for version in versions {
+        let game_matches = version["game_versions"].as_array()
+            .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(minecraft_version)));
+        let loader_matches = version["loaders"].as_array()
+            .is_some_and(|values| values.iter().any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(loader))));
+        if !game_matches || !loader_matches { continue; }
+        let Some(files) = version["files"].as_array() else { continue; };
+        for file in files {
+            if file["filename"].as_str() != Some(filename) { continue; }
+            let checksum_matches = file["hashes"]["sha1"].as_str()
+                .is_some_and(|hash| hash.eq_ignore_ascii_case(expected_sha1));
+            if !checksum_matches { continue; }
+            let Some(url) = file["url"].as_str() else { continue; };
+            let parsed = match reqwest::Url::parse(url) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            };
+            if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
+                continue;
+            }
+            return Ok(Some(url.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
 async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let _reservation = InstanceReservation::acquire(name.clone())?;
@@ -1502,6 +1558,23 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         if details["modId"].as_u64() != Some(project) || details["id"].as_u64() != Some(file) {
             return Err(format!("CurseForge returned mismatched metadata for mod {project}/{file}."));
         }
+        let filename = details["fileName"].as_str()
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| format!("CurseForge did not provide a filename for mod {project}/{file}."))?
+            .to_owned();
+        let expected_size = details["fileLength"].as_u64()
+            .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+            .ok_or_else(|| format!("CurseForge did not provide a valid size for mod {project}/{file}."))?;
+        let expected_sha1 = details["hashes"].as_array()
+            .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
+            .and_then(|hash| hash["value"].as_str())
+            .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+            .ok_or_else(|| format!("CurseForge did not provide a valid SHA-1 checksum for mod {project}/{file}."))?;
+        total_download_bytes = total_download_bytes.checked_add(expected_size)
+            .ok_or("CurseForge pack download size overflowed.")?;
+        if total_download_bytes > MAX_ARCHIVE_TOTAL_BYTES {
+            return Err("The CurseForge pack's required downloads exceed NOVA's 2 GiB safety limit.".into());
+        }
         let url: String = if let Some(direct_url) = details["downloadUrl"].as_str().filter(|url| url.starts_with("https://")) {
             direct_url.to_owned()
         } else {
@@ -1510,33 +1583,26 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
                 .map_err(|e| format!("Could not resolve CurseForge mod {}: {e}", i+1))?;
             let status = response.status();
             if status == reqwest::StatusCode::FORBIDDEN {
-                let file_name = details["fileName"].as_str().unwrap_or("this file");
-                return Err(format!("CurseForge refused the download URL for required mod {} ({file_name}, {project}/{file}) with HTTP 403. This may be a third-party-download restriction on the file or an API-key permission issue. NOVA cannot bypass that restriction; try another modpack version or install this file through CurseForge.", i+1));
+                if let Some(alternate) = resolve_verified_modrinth_fallback(
+                    &client, project, &filename, &mc_version, &loader, expected_sha1
+                ).await? {
+                    updater_log(&format!("CurseForge returned HTTP 403 for {filename}; using an exact Modrinth mirror verified by SHA-1."));
+                    alternate
+                } else {
+                    return Err(format!("CurseForge refused the download URL for required mod {} ({filename}, {project}/{file}) with HTTP 403. NOVA also checked its verified Modrinth mirror and found no exact Minecraft/loader/file/checksum match. Try another modpack version or install this file through CurseForge.", i+1));
+                }
+            } else {
+                let payload = response.error_for_status()
+                    .map_err(|e| format!("CurseForge could not provide mod {}: {e}", i+1))?
+                    .json::<Value>().await
+                    .map_err(|e| format!("CurseForge mod {} download response was unreadable: {e}", i+1))?;
+                payload["data"].as_str()
+                    .ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}."))?
+                    .to_owned()
             }
-            let payload = response.error_for_status()
-                .map_err(|e| format!("CurseForge could not provide mod {}: {e}", i+1))?
-                .json::<Value>().await
-                .map_err(|e| format!("CurseForge mod {} download response was unreadable: {e}", i+1))?;
-            payload["data"].as_str()
-                .ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}."))?
-                .to_owned()
         };
-        let filename = format!("{project}-{file}.jar");
         let mods_folder = folder.join("mods");
         std::fs::create_dir_all(&mods_folder).map_err(|e| format!("Could not create mods folder: {e}"))?;
-        let expected_size = details["fileLength"].as_u64()
-            .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
-            .ok_or_else(|| format!("CurseForge did not provide a valid size for mod {project}/{file}."))?;
-        total_download_bytes = total_download_bytes.checked_add(expected_size)
-            .ok_or("CurseForge pack download size overflowed.")?;
-        if total_download_bytes > MAX_ARCHIVE_TOTAL_BYTES {
-            return Err("The CurseForge pack's required downloads exceed NOVA's 2 GiB safety limit.".into());
-        }
-        let expected_sha1 = details["hashes"].as_array()
-            .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
-            .and_then(|hash| hash["value"].as_str())
-            .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
-            .ok_or_else(|| format!("CurseForge did not provide a valid SHA-1 checksum for mod {project}/{file}."))?;
         let destination = mods_folder.join(&filename);
         let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let staging = mods_folder.join(format!(".{filename}.{}.{sequence}.partial", std::process::id()));
