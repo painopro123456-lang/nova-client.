@@ -7,14 +7,12 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 public final class NovaMenuScreen extends Screen {
     private static final int PANEL=0xF20D101A, ACCENT=0xFF9B7CFF, MUTED=0xFF929CB2;
-    private final Map<String,Boolean> modules=new LinkedHashMap<>();
-    private static final Map<String,String> CATEGORIES=Map.of("Keystrokes","HUD","FPS","HUD","CPS","HUD","Armor Status","HUD","Potion Effects","HUD","Toggle Sprint","Player","Crosshair","Visual","Clock","HUD");
+
+    private static final Map<String,String> CATEGORIES=Map.of("Keystrokes","HUD","FPS","HUD","Clock","HUD");
     private String category="All";
     public NovaMenuScreen() {
         super(Component.literal("NOVA Client"));
-        modules.put("Keystrokes",true); modules.put("FPS",true); modules.put("CPS",false);
-        modules.put("Armor Status",false); modules.put("Potion Effects",false); modules.put("Toggle Sprint",false);
-        modules.put("Crosshair",false); modules.put("Clock",false);
+
     }
     @Override protected void init() { rebuildWidgets(); }
     @Override protected void rebuildWidgets() {
@@ -27,13 +25,12 @@ public final class NovaMenuScreen extends Screen {
                 .bounds(l+20,t+65+i*34,130,26).build());
         }
         int cx=l+178, cy=t+112, cw=Math.max(100,(pw-220)/2), index=0;
-        for(Map.Entry<String,Boolean> entry:modules.entrySet()) {
-            String name=entry.getKey();
+        for(String name:CATEGORIES.keySet()) {
             if(!category.equals("All")&&!category.equals(CATEGORIES.get(name))) continue;
             int col=index%2,row=index/2,x=cx+col*(cw+12),y=cy+row*48;
-            boolean enabled=entry.getValue();
+            boolean enabled=NovaModules.enabled(name);
             addRenderableWidget(Button.builder(Component.literal(name+"  ·  "+(enabled?"ON":"OFF")),b->{
-                boolean next=!modules.get(name); modules.put(name,next);
+                boolean next=!NovaModules.enabled(name); NovaModules.setEnabled(name,next);
                 b.setMessage(Component.literal(name+"  ·  "+(next?"ON":"OFF")));
             }).bounds(x,y,cw,34).build());
             index++;
@@ -48,7 +45,7 @@ public final class NovaMenuScreen extends Screen {
         g.text(font,"RIGHT SHIFT  -  CLOSE",l+pw-158,t+25,MUTED,false);
         g.fill(l+20,t+48,l+pw-20,t+49,0xFF303849);
         g.text(font,category.equals("All")?"Modules":category,l+178,t+91,0xFFFFFFFF,false);
-        g.text(font,"Preview only · gameplay features are not active yet",l+178,t+ph-48,MUTED,false);
+        g.text(font,"Live HUD modules · changes save automatically",l+178,t+ph-48,MUTED,false);
         g.text(font,"NOVA IN-GAME  -  EARLY DEVELOPMENT",l+26,t+ph-24,MUTED,false);
     }
     @Override public boolean isPauseScreen(){return false;}
