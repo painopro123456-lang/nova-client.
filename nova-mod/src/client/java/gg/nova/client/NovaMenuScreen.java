@@ -11,7 +11,7 @@ public final class NovaMenuScreen extends Screen {
 
     private static final Map<String,String> CATEGORIES=Map.of(
         "Keystrokes","HUD", "FPS","HUD", "Clock","HUD",
-        "Coordinates","HUD", "Direction","HUD"
+        "Coordinates","HUD", "Direction","HUD", "Armor Status","HUD"
     );
     private String category="All";
 
@@ -52,7 +52,7 @@ public final class NovaMenuScreen extends Screen {
         g.text(font,"RIGHT SHIFT  -  CLOSE",l+pw-158,t+25,MUTED,false);
         g.fill(l+20,t+48,l+pw-20,t+49,0xFF303849);
         g.text(font,category.equals("All")?"Modules":category,l+178,t+91,0xFFFFFFFF,false);
-        g.text(font,"5 live HUD modules · changes save automatically",l+178,t+ph-48,MUTED,false);
+        g.text(font,"6 live HUD modules · changes save automatically",l+178,t+ph-48,MUTED,false);
         g.text(font,"NOVA IN-GAME  -  EARLY DEVELOPMENT",l+26,t+ph-24,MUTED,false);
     }
 
