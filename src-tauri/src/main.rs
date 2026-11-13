@@ -527,6 +527,11 @@ async fn download_pack_archive(app: &tauri::AppHandle, url: &str, destination: &
                 last_reported = downloaded;
             }
         }
+        if let Some(size) = total {
+            if downloaded != size {
+                return Err(format!("The archive download was incomplete (expected {size} bytes, received {downloaded})."));
+            }
+        }
         file.flush().await.map_err(|e| format!("Could not flush downloaded archive: {e}"))?;
         drop(file);
         std::fs::rename(&temporary, destination)
@@ -603,6 +608,11 @@ async fn download_pack_file(app: &tauri::AppHandle, url: &str, destination: &Pat
                 };
                 emit_pack_progress(app, "files", 0, 0, &detail);
                 last_progress = downloaded;
+            }
+        }
+        if let Some(total) = expected_total {
+            if downloaded != total {
+                return Err(format!("A mod download was incomplete (expected {total} bytes, received {downloaded})."));
             }
         }
         file.flush().await.map_err(|e| format!("Could not flush mod download: {e}"))?;
