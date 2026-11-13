@@ -11,6 +11,7 @@ import net.minecraft.resources.Identifier;
 
 public final class NovaClient implements ClientModInitializer {
     private KeyMapping openMenuKey;
+    private boolean handledInScreen;
     private static final KeyMapping.Category CATEGORY=KeyMapping.Category.register(Identifier.fromNamespaceAndPath("nova","main"));
 
     @Override public void onInitializeClient() {
@@ -25,13 +26,15 @@ public final class NovaClient implements ClientModInitializer {
 
         ClientTickEvents.END_CLIENT_TICK.register(client->{
             while(openMenuKey.consumeClick()){
-                if(client.gui.screen()==null&&client.player!=null)client.gui.setScreen(new NovaMenuScreen());
+                if(!handledInScreen&&client.gui.screen()==null&&client.player!=null)client.gui.setScreen(new NovaMenuScreen());
             }
+            handledInScreen=false;
         });
 
         ScreenEvents.AFTER_INIT.register((client,screen,scaledWidth,scaledHeight)->{
             ScreenKeyboardEvents.afterKeyPress(screen).register((current,keyEvent)->{
                 if(!openMenuKey.matches(keyEvent)||client.player==null)return;
+                handledInScreen=true;
                 if(current instanceof NovaMenuScreen)client.gui.setScreen(null);
                 else client.gui.setScreen(new NovaMenuScreen());
             });
