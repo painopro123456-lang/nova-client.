@@ -426,8 +426,10 @@ fn instance_folder(instance_name: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(local).join("NOVA Client").join("minecraft").join("instances").join(safe_instance_name(instance_name)?))
 }
 
-fn extract_pack_overrides(bytes: &[u8], prefix: &str, destination: &Path) -> Result<(), String> {
-    let mut archive = ZipArchive::new(Cursor::new(bytes))
+fn extract_pack_overrides(archive_path: &Path, prefix: &str, destination: &Path) -> Result<(), String> {
+    let archive_file = std::fs::File::open(archive_path)
+        .map_err(|e| format!("Could not open downloaded modpack archive: {e}"))?;
+    let mut archive = ZipArchive::new(archive_file)
         .map_err(|e| format!("The modpack archive is invalid: {e}"))?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err("The modpack archive contains too many files and was blocked for safety.".into());
@@ -457,31 +459,77 @@ fn extract_pack_overrides(bytes: &[u8], prefix: &str, destination: &Path) -> Res
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("Could not create pack folder: {e}"))?;
             }
-            let mut file_bytes = Vec::new();
-            entry.read_to_end(&mut file_bytes)
-                .map_err(|e| format!("Could not extract pack override: {e}"))?;
-            atomic_write(&output, &file_bytes)
-                .map_err(|e| format!("Could not write pack override: {e}"))?;
+            let output_name = output.file_name().and_then(|n| n.to_str()).unwrap_or("override");
+            let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let temporary = output.with_file_name(format!(".{output_name}.{}.{sequence}.partial", std::process::id()));
+            let extraction_result = (|| -> Result<(), String> {
+                let mut file = std::fs::File::create(&temporary)
+                    .map_err(|e| format!("Could not create temporary pack override: {e}"))?;
+                std::io::copy(&mut entry, &mut file)
+                    .map_err(|e| format!("Could not extract pack override: {e}"))?;
+                file.flush().map_err(|e| format!("Could not flush pack override: {e}"))?;
+                std::fs::rename(&temporary, &output)
+                    .map_err(|e| format!("Could not finalize pack override: {e}"))?;
+                Ok(())
+            })();
+            if extraction_result.is_err() { let _ = std::fs::remove_file(&temporary); }
+            extraction_result?;
         }
     }
     Ok(())
 }
 
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+async fn download_pack_archive(app: &tauri::AppHandle, url: &str, destination: &Path) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());
     }
     let response = http_client()?.get(url).send().await
-        .map_err(|e| format!("Download failed: {e}"))?
-        .error_for_status().map_err(|e| format!("Download server returned an error: {e}"))?;
-    if response.content_length().is_some_and(|size| size > MAX_ARCHIVE_TOTAL_BYTES) {
+        .map_err(|e| format!("Archive download failed: {e}"))?
+        .error_for_status().map_err(|e| format!("Archive server returned an error: {e}"))?;
+    let total = response.content_length();
+    if total.is_some_and(|size| size > MAX_ARCHIVE_TOTAL_BYTES) {
         return Err("The downloaded archive exceeds NOVA's 2 GiB safety limit.".into());
     }
-    let bytes = response.bytes().await.map_err(|e| format!("Could not read downloaded file: {e}"))?;
-    if bytes.len() as u64 > MAX_ARCHIVE_TOTAL_BYTES {
-        return Err("The downloaded archive exceeds NOVA's 2 GiB safety limit.".into());
-    }
-    Ok(bytes.to_vec())
+    let parent = destination.parent().ok_or("Archive destination has no parent folder.")?;
+    tokio::fs::create_dir_all(parent).await
+        .map_err(|e| format!("Could not create modpack folder: {e}"))?;
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".nova-pack-{}-{sequence}.partial", std::process::id()));
+    let result: Result<(), String> = async {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(&temporary).await
+            .map_err(|e| format!("Could not create temporary archive: {e}"))?;
+        let mut response = response;
+        let mut downloaded = 0u64;
+        let mut last_reported = 0u64;
+        while let Some(chunk) = response.chunk().await
+            .map_err(|e| format!("Could not read modpack archive: {e}"))? {
+            downloaded = downloaded.checked_add(chunk.len() as u64)
+                .ok_or("Archive download size overflowed.")?;
+            if downloaded > MAX_ARCHIVE_TOTAL_BYTES {
+                return Err("The downloaded archive exceeds NOVA's 2 GiB safety limit.".into());
+            }
+            file.write_all(&chunk).await
+                .map_err(|e| format!("Could not write temporary archive: {e}"))?;
+            if downloaded.saturating_sub(last_reported) >= 1024 * 1024 {
+                let detail = if let Some(size) = total {
+                    format!("Downloading modpack archive: {:.1} / {:.1} MB", downloaded as f64 / 1_048_576.0, size as f64 / 1_048_576.0)
+                } else {
+                    format!("Downloading modpack archive: {:.1} MB", downloaded as f64 / 1_048_576.0)
+                };
+                let percent = total.map(|size| ((downloaded as f64 / size.max(1) as f64) * 15.0).round() as u32);
+                let _ = app.emit("nova-pack-progress", json!({"phase":"archive","completed":downloaded,"total":total.unwrap_or(0),"percent":percent,"detail":detail}));
+                last_reported = downloaded;
+            }
+        }
+        file.flush().await.map_err(|e| format!("Could not flush downloaded archive: {e}"))?;
+        drop(file);
+        std::fs::rename(&temporary, destination)
+            .map_err(|e| format!("Could not finalize downloaded archive: {e}"))?;
+        Ok(())
+    }.await;
+    if result.is_err() { let _ = tokio::fs::remove_file(&temporary).await; }
+    result
 }
 
 fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -611,9 +659,13 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let file = latest["files"].as_array().and_then(|a| a.iter().find(|f| f["primary"].as_bool() == Some(true)).or_else(|| a.first()))
         .ok_or("Modrinth did not provide a modpack archive.")?;
     let download_url = file["url"].as_str().ok_or("Modrinth download URL is missing.")?;
+    let folder = instance_folder(&name)?;
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    let archive_path = folder.join(".nova-modrinth-pack.zip");
     emit_pack_progress(&app, "archive", 0, 0, "Downloading Modrinth archive");
-    let archive_bytes = fetch_bytes(download_url).await?;
-    let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
+    download_pack_archive(&app, download_url, &archive_path).await?;
+    let mut archive = ZipArchive::new(std::fs::File::open(&archive_path)
+        .map_err(|e| format!("Could not open downloaded Modrinth archive: {e}"))?)
         .map_err(|e| format!("The Modrinth pack is not a valid ZIP archive: {e}"))?;
     let mut index_bytes = Vec::new();
     archive.by_name("modrinth.index.json")
@@ -631,8 +683,6 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let (loader, loader_build) = if let Some((key, build)) = loader_entry {
         (match key { "fabric-loader"=>"fabric", "quilt-loader"=>"quilt", "legacy-fabric"=>"legacyfabric", other=>other }.to_owned(), build.to_owned())
     } else { ("vanilla".to_owned(), String::new()) };
-    let folder = instance_folder(&name)?;
-    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
     let pack_files = index["files"].as_array().ok_or("Modrinth manifest has no files list.")?;
     let total_files = pack_files.iter().filter(|item| item["env"]["client"].as_str() != Some("unsupported")).count() as u64;
     let mut completed_files = 0u64;
@@ -658,8 +708,9 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
     }
-    extract_pack_overrides(&archive_bytes, "overrides/", &folder)?;
-    extract_pack_overrides(&archive_bytes, "client-overrides/", &folder)?;
+    extract_pack_overrides(&archive_path, "overrides/", &folder)?;
+    extract_pack_overrides(&archive_path, "client-overrides/", &folder)?;
+    let _ = std::fs::remove_file(&archive_path);
     let title = index["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(&name).to_owned();
     save_instance_metadata(&folder, json!({
         "instanceName":name,"name":title,"minecraftVersion":mc_version,"loader":loader,
@@ -736,9 +787,13 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         .error_for_status().map_err(|e| format!("CurseForge did not provide a download URL: {e}"))?
         .json::<Value>().await.map_err(|e| format!("CurseForge download response was unreadable: {e}"))?["data"]
         .as_str().ok_or("CurseForge did not provide a downloadable archive URL for this file.")?.to_owned();
+    let folder = instance_folder(&name)?;
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    let archive_path = folder.join(".nova-curseforge-pack.zip");
     emit_pack_progress(&app, "archive", 0, 0, "Downloading CurseForge archive");
-    let archive_bytes = fetch_bytes(&manifest_url).await?;
-    let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
+    download_pack_archive(&app, &manifest_url, &archive_path).await?;
+    let mut archive = ZipArchive::new(std::fs::File::open(&archive_path)
+        .map_err(|e| format!("Could not open downloaded CurseForge archive: {e}"))?)
         .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
     let mut manifest_bytes = Vec::new();
     archive.by_name("manifest.json").map_err(|_| "This CurseForge archive is missing manifest.json.".to_string())?
@@ -754,8 +809,6 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         .and_then(|a| a.iter().find(|v| v["primary"].as_bool() == Some(true)).or_else(|| a.first()))
         .and_then(|v| v["id"].as_str());
     let (loader, loader_build) = if let Some(id) = loader_entry { loader_from_id(id)? } else { ("vanilla".into(), String::new()) };
-    let folder = instance_folder(&name)?;
-    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
     let pack_files = manifest["files"].as_array().ok_or("CurseForge manifest has no files list.")?;
     let total_files = pack_files.iter().filter(|item| item["required"].as_bool() != Some(false)).count() as u64;
     let mut completed_files = 0u64;
@@ -777,7 +830,8 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
     }
-    extract_pack_overrides(&archive_bytes, "overrides/", &folder)?;
+    extract_pack_overrides(&archive_path, "overrides/", &folder)?;
+    let _ = std::fs::remove_file(&archive_path);
     let title = manifest["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(&name).to_owned();
     save_instance_metadata(&folder, json!({
         "instanceName":name,"name":title,"minecraftVersion":mc_version,"loader":loader,
