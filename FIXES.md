@@ -31,7 +31,7 @@ Only check an item after its code change is committed and the relevant build/tes
 - [x] 22. Validate localStorage data shapes before rendering.
 - [x] 23. Show the signed-in account in the profile UI.
 - [x] 24. Provide a working sign-out control.
-- [x] 25. Replace the settings placeholder with functional settings.
+- [ ] 25. Replace the settings placeholder with functional settings.
 - [ ] 26. Replace or clearly label the PvP placeholder.
 - [x] 27. Keep progress event handling alive while the catalog screen is unmounted.
 
