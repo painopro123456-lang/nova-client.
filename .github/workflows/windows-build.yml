@@ -87,6 +87,10 @@ jobs:
         working-directory: D:/a/nova-src
         run: npm run build
 
+      - name: Run Rust unit tests
+        working-directory: D:/a/nova-src
+        run: cargo test --manifest-path src-tauri/Cargo.toml
+
       - name: Build NOVA Windows installer (verbose)
         working-directory: D:/a/nova-src
         env:
