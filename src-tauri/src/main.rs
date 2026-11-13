@@ -752,6 +752,7 @@ fn list_instances() -> Result<Value,String> {
 #[tauri::command]
 fn create_instance(instance_name: String, display_name: String, version: String, loader: String) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _install_guard=InstallGuard::acquire(name.clone())?;
     let version = version.trim();
     if version.is_empty() || version.eq_ignore_ascii_case("null") || version.eq_ignore_ascii_case("undefined") {
         return Err("Choose a valid Minecraft version.".into());
