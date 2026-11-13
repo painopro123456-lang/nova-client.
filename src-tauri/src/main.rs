@@ -470,11 +470,28 @@ fn extract_pack_overrides(bytes: &[u8], prefix: &str, destination: &Path) -> Res
             let mut file_bytes = Vec::new();
             entry.read_to_end(&mut file_bytes)
                 .map_err(|e| format!("Could not extract pack override: {e}"))?;
-            std::fs::write(&output, file_bytes)
-                .map_err(|e| format!("Could not write pack override: {e}"))?;
+            write_atomic(&output,&file_bytes).map_err(|e|format!("Could not write pack override: {e}"))?;
         }
     }
     Ok(())
+}
+
+fn verify_download(bytes:&[u8],expected_size:Option<u64>,expected_sha1:Option<&str>)->Result<(),String>{
+    if let Some(size)=expected_size {if bytes.len() as u64!=size{return Err(format!("A downloaded file had an unexpected size (expected {size}, received {}).",bytes.len()));}}
+    if let Some(expected)=expected_sha1.filter(|hash|!hash.is_empty()){
+        let digest=Sha1::digest(bytes);
+        let actual=digest.iter().map(|byte|format!("{byte:02x}")).collect::<String>();
+        if !actual.eq_ignore_ascii_case(expected){return Err("A downloaded file failed its SHA-1 integrity check.".into());}
+    }
+    Ok(())
+}
+
+fn write_atomic(destination:&Path,bytes:&[u8])->Result<(),String>{
+    if let Some(parent)=destination.parent(){std::fs::create_dir_all(parent).map_err(|e|format!("Could not create download folder: {e}"))?;}
+    let temp=destination.with_extension(format!("nova-{}.part",std::process::id()));
+    std::fs::write(&temp,bytes).map_err(|e|format!("Could not write temporary download: {e}"))?;
+    if destination.exists(){std::fs::remove_file(destination).map_err(|e|format!("Could not replace an existing file: {e}"))?;}
+    std::fs::rename(&temp,destination).map_err(|e|{let _=std::fs::remove_file(&temp);format!("Could not finalize downloaded file: {e}")})
 }
 
 async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
@@ -491,26 +508,10 @@ async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
 }
 
 async fn download_pack_file(url: &str, destination: &Path, expected_size: Option<u64>, expected_sha1: Option<&str>) -> Result<(), String> {
-    let bytes = fetch_bytes(url).await?;
-    if let Some(size) = expected_size {
-        if bytes.len() as u64 != size {
-            return Err(format!("A mod file had an unexpected size (expected {size}, received {}).", bytes.len()));
-        }
-    }
-    if let Some(expected) = expected_sha1.filter(|s| !s.is_empty()) {
-        let digest = Sha1::digest(&bytes);
-        let actual = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err("A mod file failed its SHA-1 integrity check.".into());
-        }
-    }
-    if let Some(parent) = destination.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| format!("Could not create mod folder: {e}"))?;
-    }
-    let temp=destination.with_extension(format!("nova-{}.part",std::process::id()));
-    std::fs::write(&temp,bytes).map_err(|e|format!("Could not save a downloaded mod: {e}"))?;
-    if destination.exists(){std::fs::remove_file(destination).map_err(|e|format!("Could not replace an existing mod file: {e}"))?;}
-    std::fs::rename(&temp,destination).map_err(|e|{let _=std::fs::remove_file(&temp);format!("Could not finalize a downloaded mod: {e}")})
+    let bytes=fetch_bytes(url).await?;
+    verify_download(&bytes,expected_size,expected_sha1)?;
+    write_atomic(destination,&bytes).map_err(|e|format!("Could not save a downloaded mod: {e}"))?;
+    Ok(())
 }
 
 fn loader_from_id(id: &str) -> Result<(String, String), String> {
@@ -553,8 +554,11 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let file = latest["files"].as_array().and_then(|a| a.iter().find(|f| f["primary"].as_bool() == Some(true)).or_else(|| a.first()))
         .ok_or("Modrinth did not provide a modpack archive.")?;
     let download_url = file["url"].as_str().ok_or("Modrinth download URL is missing.")?;
+    let archive_size=file["size"].as_u64();
+    let archive_sha1=file["hashes"]["sha1"].as_str();
     emit_pack_progress(&app, "archive", 0, 0, "Downloading Modrinth archive");
     let archive_bytes = fetch_bytes(download_url).await?;
+    verify_download(&archive_bytes,archive_size,archive_sha1).map_err(|e|format!("Modrinth archive integrity check failed: {e}"))?;
     let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
         .map_err(|e| format!("The Modrinth pack is not a valid ZIP archive: {e}"))?;
     let mut index_bytes = Vec::new();
@@ -671,8 +675,11 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         .error_for_status().map_err(|e| format!("CurseForge did not provide a download URL: {e}"))?
         .json::<Value>().await.map_err(|e| format!("CurseForge download response was unreadable: {e}"))?["data"]
         .as_str().ok_or("CurseForge did not provide a downloadable archive URL for this file.")?.to_owned();
+    let archive_size=selected_file["fileLength"].as_u64();
+    let archive_sha1=selected_file["hashes"].as_array().and_then(|hashes|hashes.iter().find(|h|h["algo"].as_u64()==Some(1))).and_then(|h|h["value"].as_str());
     emit_pack_progress(&app, "archive", 0, 0, "Downloading CurseForge archive");
     let archive_bytes = fetch_bytes(&manifest_url).await?;
+    verify_download(&archive_bytes,archive_size,archive_sha1).map_err(|e|format!("CurseForge archive integrity check failed: {e}"))?;
     let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
         .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
     let mut manifest_bytes = Vec::new();
