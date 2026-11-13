@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_version:
-        description: "Optional version tag to publish (example: v0.1.1). Leave blank for a build only."
+        description: "Optional version tag to publish (example: v0.1.1). Leave blank for an automatic build version."
         required: false
         type: string
   push:
@@ -120,109 +120,16 @@ jobs:
           } else {
             $version = "0.1.${{ github.run_number }}"
           }
-          if ($version -notmatch '^\\d+\\.\\d+\\.\\d+        working-directory: D:/a/nova-src
-        run: npm run build
-
-      - name: Run Rust unit tests
-        working-directory: D:/a/nova-src
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-
-      - name: Build NOVA Windows installer (verbose)
-        working-directory: D:/a/nova-src
-        env:
-          CARGO_TERM_COLOR: always
-          RUST_BACKTRACE: 1
-          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
-        run: npm run tauri -- build --verbose
-
-      - name: Give installer a clean filename
-        shell: pwsh
-        working-directory: D:/a/nova-src
-        run: |
-          $installerDir = "src-tauri/target/release/bundle/nsis"
-          $installers = @(Get-ChildItem -Path $installerDir -Filter "*.exe" -File)
-          if ($installers.Count -ne 1) {
-            throw "Expected exactly one NSIS installer, found $($installers.Count)."
-          }
-          $target = Join-Path $installerDir "NOVA-Client-Setup.exe"
-          if ($installers[0].FullName -ne (Join-Path (Get-Location) $target)) {
-            Move-Item -LiteralPath $installers[0].FullName -Destination $target -Force
-          }
-
-      - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: NOVA-Client-Windows-Installer
-          path: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe
-          if-no-files-found: error
-          retention-days: 14
-      - name: Publish versioned GitHub release
-        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release_version != '')
-        uses: softprops/action-gh-release@v2
-        with:
-          name: NOVA Client v${{ steps.version.outputs.version }}
-          tag_name: v${{ steps.version.outputs.version }}
-          target_commitish: ${{ github.sha }}
-          generate_release_notes: true
-          overwrite_files: true
-          files: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe
-          fail_on_unmatched_files: true
-) { throw "Invalid release version: $version" }
+          if ($version -notmatch '^\d+\.\d+\.\d+') { throw "Invalid release version: $version" }
           $cargo = Get-Content "src-tauri/Cargo.toml" -Raw
-          $cargo = [regex]::Replace($cargo, '(?m)^version = ".*"        working-directory: D:/a/nova-src
-        run: npm run build
-
-      - name: Run Rust unit tests
-        working-directory: D:/a/nova-src
-        run: cargo test --manifest-path src-tauri/Cargo.toml
-
-      - name: Build NOVA Windows installer (verbose)
-        working-directory: D:/a/nova-src
-        env:
-          CARGO_TERM_COLOR: always
-          RUST_BACKTRACE: 1
-          CURSEFORGE_API_KEY: ${{ secrets.CURSEFORGE_API_KEY }}
-        run: npm run tauri -- build --verbose
-
-      - name: Give installer a clean filename
-        shell: pwsh
-        working-directory: D:/a/nova-src
-        run: |
-          $installerDir = "src-tauri/target/release/bundle/nsis"
-          $installers = @(Get-ChildItem -Path $installerDir -Filter "*.exe" -File)
-          if ($installers.Count -ne 1) {
-            throw "Expected exactly one NSIS installer, found $($installers.Count)."
-          }
-          $target = Join-Path $installerDir "NOVA-Client-Setup.exe"
-          if ($installers[0].FullName -ne (Join-Path (Get-Location) $target)) {
-            Move-Item -LiteralPath $installers[0].FullName -Destination $target -Force
-          }
-
-      - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
-        with:
-          name: NOVA-Client-Windows-Installer
-          path: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe
-          if-no-files-found: error
-          retention-days: 14
-      - name: Publish versioned GitHub release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.release_version != ''
-        uses: softprops/action-gh-release@v2
-        with:
-          name: NOVA Client ${{ inputs.release_version || github.ref_name }}
-          tag_name: ${{ inputs.release_version || github.ref_name }}
-          target_commitish: ${{ github.sha }}
-          generate_release_notes: true
-          files: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe
-          fail_on_unmatched_files: true
-, "version = `"$version`"", 1)
+          $cargo = $cargo -replace '(?m)^version = "[^"]+"', ('version = "' + $version + '"')
           Set-Content -Path "src-tauri/Cargo.toml" -Value $cargo -NoNewline
-          $config = Get-Content "src-tauri/tauri.conf.json" -Raw
-          $config = [regex]::Replace($config, '"version": ".*?"', "`"version`": `"$version`"", 1)
-          Set-Content -Path "src-tauri/tauri.conf.json" -Value $config -NoNewline
-          $package = Get-Content "package.json" -Raw
-          $package = [regex]::Replace($package, '"version": ".*?"', "`"version`": `"$version`"", 1)
-          Set-Content -Path "package.json" -Value $package -NoNewline
+          $config = Get-Content "src-tauri/tauri.conf.json" -Raw | ConvertFrom-Json
+          $config.version = $version
+          $config | ConvertTo-Json -Depth 100 | Set-Content "src-tauri/tauri.conf.json"
+          $package = Get-Content "package.json" -Raw | ConvertFrom-Json
+          $package.version = $version
+          $package | ConvertTo-Json -Depth 100 | Set-Content "package.json"
           "version=$version" >> $env:GITHUB_OUTPUT
           Write-Host "Building NOVA version $version"
 
@@ -263,13 +170,15 @@ jobs:
           path: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe
           if-no-files-found: error
           retention-days: 14
+
       - name: Publish versioned GitHub release
-        if: startsWith(github.ref, 'refs/tags/') || inputs.release_version != ''
+        if: github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.release_version != '')
         uses: softprops/action-gh-release@v2
         with:
-          name: NOVA Client ${{ inputs.release_version || github.ref_name }}
-          tag_name: ${{ inputs.release_version || github.ref_name }}
+          name: NOVA Client v${{ steps.version.outputs.version }}
+          tag_name: v${{ steps.version.outputs.version }}
           target_commitish: ${{ github.sha }}
           generate_release_notes: true
+          overwrite_files: true
           files: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe
           fail_on_unmatched_files: true
