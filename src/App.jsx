@@ -359,7 +359,7 @@ function LocalInstances({ versions, memoryMb, setPage }) {
         selectedInstanceTab==="content"?<div style={{maxHeight:440,overflowY:"auto",display:"grid",gap:8}}>
           <div className="feature-status">{instancePanel.content.length} MOD FILE{instancePanel.content.length===1?"":"S"}</div>
           {instancePanel.content.length===0?<div className="catalog-note">No mod JAR files found in this modpack yet.</div>:instancePanel.content.map((file,index)=><div key={file.name+index} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,padding:"10px 12px",border:"1px solid var(--border-color,rgba(255,255,255,.08))",borderRadius:10}}><span style={{display:"flex",alignItems:"center",gap:10,minWidth:0}}><Package size={16}/><b style={{fontSize:13,overflowWrap:"anywhere"}}>{file.name}</b></span><span className="feature-status" style={{whiteSpace:"nowrap"}}>{file.size<1048576?(file.size/1024).toFixed(0)+" KB":(file.size/1048576).toFixed(1)+" MB"}</span></div>)}
-        </div>:<><div className="eyebrow" style={{marginBottom:8}}>MINECRAFT LOGS</div><pre className="catalog-note" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:360,overflowY:"auto",fontSize:12,lineHeight:1.6}}>{instancePanel.logs||"No Minecraft logs found yet. Launch this modpack first."}</pre><button className="secondary-btn" onClick={()=>openInstancePanel(selectedInstance,"logs")} disabled={instancePanel.loading}>Refresh logs</button></>)
+        </div>:<><div className="eyebrow" style={{marginBottom:8}}>THIS MODPACK · MINECRAFT LOGS</div><LogViewer text={instancePanel.logs||"No Minecraft logs found yet. Launch this modpack first."} maxHeight={360}/><button className="secondary-btn" style={{marginTop:10}} onClick={()=>openInstancePanel(selectedInstance,"logs")} disabled={instancePanel.loading}>Refresh logs</button></>)
         ):<div className="catalog-note">Loading modpack details…</div>}
       <div className="pack-version-actions"><button className="secondary-btn" onClick={()=>setSelectedInstance(null)}>Back to instances</button></div>
     </section></div>}
@@ -415,19 +415,6 @@ function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateErr
       </select>
     </div>
     <div className="catalog-note">Restart Minecraft after changing this setting. Leave enough memory for Windows and other apps.</div>
-    <div className="section-heading"><div><div className="eyebrow">GAME DIAGNOSTICS</div><h2>Minecraft launch logs</h2></div><button className="secondary-btn" onClick={refreshGameLogs}>Refresh game logs</button></div>
-    <div className="feature-card">
-      <b>Launcher & download activity</b>
-      <p>Sign-in refresh, Minecraft preparation, downloads, launch errors and game exit status. No access tokens are written to this log.</p>
-      <LogViewer text={gameLogs?.launcherLog||"No launcher activity logged yet."} maxHeight={260}/>
-      <span className="feature-status">{gameLogs?.launcherLogPath||"%LOCALAPPDATA%\\NOVA Client\\logs\\game-launch.log"}</span>
-    </div>
-    <div className="feature-card">
-      <b>Minecraft game log</b>
-      <p>The game's own latest.log, including startup errors, mod errors and crash details.</p>
-      <LogViewer text={gameLogs?.minecraftLog||"Minecraft latest.log has not been created yet."} maxHeight={320}/>
-      <span className="feature-status">{gameLogs?.minecraftLogPath||"minecraft\\logs\\latest.log"}</span>
-    </div>
     <div className="section-heading"><div><div className="eyebrow">NOVA SOFTWARE</div><h2>Updates</h2></div></div>
     <div className="feature-card updater-card">
       <div className="feature-icon blue"><ArrowDownToLine size={18}/></div>
