@@ -704,7 +704,7 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let folder=instance_folder(&name)?;
     std::fs::create_dir_all(&folder).map_err(|e|format!("Could not create instance folder: {e}"))?;
     ensure_free_space(&folder,archive_size.unwrap_or(0).saturating_add(512*1024*1024))?;
-    std::fs::write(folder.join(".nova-installing"),b"installing").map_err(|e|format!("Could not mark the modpack installation: {e}"))?;
+    std::fs::write(folder.join(".nova-installing"),std::process::id().to_string()).map_err(|e|format!("Could not mark the modpack installation: {e}"))?;
     let archive_path=folder.join(".modrinth-pack.zip");
     emit_pack_progress(&app,"archive",0,0,"Downloading Modrinth archive");
     download_to_file(download_url,&archive_path,&app,&name,"archive","Downloading Modrinth archive",archive_size,archive_sha1).await
@@ -911,9 +911,8 @@ fn list_instances() -> Result<Value,String> {
         let marker=folder.join(".nova-installing");
         let path=folder.join("nova-instance.json");
         if marker.exists()&&!path.exists(){
-            let stale=std::fs::metadata(&marker).and_then(|m|m.modified()).ok()
-                .and_then(|time|SystemTime::now().duration_since(time).ok())
-                .is_some_and(|age|age>Duration::from_secs(24*60*60));
+            let installer_pid=std::fs::read_to_string(&marker).ok().and_then(|value|value.trim().parse::<u32>().ok());
+            let stale=installer_pid.map(|pid|!process_is_running(pid)).unwrap_or(true);
             if stale { let _=std::fs::remove_dir_all(&folder); }
             continue;
         }
