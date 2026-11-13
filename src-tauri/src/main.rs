@@ -416,7 +416,6 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String, 
     let auth = Authenticator::new()
         .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
     let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
-    let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
     let account = auth.refresh(&saved_account).await
         .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
     let refreshed_json = serde_json::to_string(&account)
@@ -452,8 +451,10 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String, 
 
     let launch = Launch::new(options, account)
         .map_err(|e| format!("Could not prepare modpack installation: {e}"))?;
-    launch.prepare().await
-        .map_err(|e| format!("Minecraft or mod-loader installation failed: {e}"))?;
+    claim_install_marker(&folder)?;
+    let prepare_result=launch.prepare().await;
+    let _=std::fs::remove_file(folder.join(".nova-installing"));
+    prepare_result.map_err(|e| format!("Minecraft or mod-loader installation failed: {e}"))?;
     emit_pack_progress(&app, "ready", 1, 1, "Minecraft and mod loader are ready");
 
     Ok(json!({
@@ -472,6 +473,17 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
     let mut loader_build = loader_build.unwrap_or_else(|| "latest".to_owned());
     if let Some(instance) = instance_name.as_deref() {
         let folder = instance_folder(instance)?;
+        let install_marker=folder.join(".nova-installing");
+        if install_marker.exists(){
+            let installer_pid=std::fs::read_to_string(&install_marker).ok().and_then(|value|value.trim().parse::<u32>().ok());
+            let active=match installer_pid{
+                Some(pid)=>process_is_running(pid),
+                None=>!std::fs::metadata(&install_marker).and_then(|metadata|metadata.modified()).ok()
+                    .and_then(|modified|modified.elapsed().ok()).is_some_and(|age|age>Duration::from_secs(600))
+            };
+            if active{return Err("This instance is currently being installed or prepared. Wait for that operation to finish.".into());}
+            let _=std::fs::remove_file(&install_marker);
+        }
         let metadata: Value = serde_json::from_slice(&std::fs::read(folder.join("nova-instance.json"))
             .map_err(|e| format!("Could not read installed instance: {e}"))?)
             .map_err(|e| format!("Installed instance metadata is invalid: {e}"))?;
@@ -504,6 +516,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
     let auth = Authenticator::new()
         .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
+    let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
     let account = auth.refresh(&saved_account).await
         .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
     let refreshed_json = serde_json::to_string(&account)
