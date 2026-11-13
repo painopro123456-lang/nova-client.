@@ -1,4 +1,3 @@
-    if(!signedIn){setPackActionMessage("Your modpack files are downloaded. Sign in with Microsoft when you are ready to install Minecraft and play.");return;}
 import { MICROSOFT_CLIENT_ID } from "./config";
 import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
