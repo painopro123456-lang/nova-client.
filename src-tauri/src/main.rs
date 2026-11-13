@@ -1071,7 +1071,10 @@ mod tests {
     #[test]
     fn memory_limits_are_validated() {
         assert_eq!(normalize_memory(Some("8G".into())).unwrap(), "8G");
-        assert_eq!(normalize_memory(None).unwrap(), "4G");
+        assert_eq!(normalize_memory(None).unwrap(), recommended_memory_max_value());
+        let recommended=normalize_memory(None).unwrap();
+        let recommended_gb=recommended.strip_suffix('G').unwrap().parse::<u8>().unwrap();
+        assert!((1..=8).contains(&recommended_gb));
         assert!(normalize_memory(Some("0G".into())).is_err());
         assert!(normalize_memory(Some("33G".into())).is_err());
         assert!(normalize_memory(Some("lots".into())).is_err());
