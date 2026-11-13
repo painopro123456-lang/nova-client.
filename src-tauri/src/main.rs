@@ -6,7 +6,8 @@ use keyring::Entry;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::io::{Cursor, Read};
+use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
 use zip::ZipArchive;
 use tauri::Emitter;
@@ -14,6 +15,7 @@ use tauri::Emitter;
 const KEYRING_SERVICE: &str = "NOVA Client";
 const MINECRAFT_ACCOUNT_USER: &str = "minecraft-account";
 const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
+const MICROSOFT_CLIENT_ID: &str = "09e6a2a2-90ee-47a6-92c4-f8810958de91";
 
 fn credential_entry(user: &str) -> Result<Entry, String> {
     Entry::new(KEYRING_SERVICE, user)
@@ -81,16 +83,53 @@ async fn curseforge_search(
 
 #[tauri::command]
 async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> {
-    let auth = Authenticator::new().map_err(|e| format!("Could not start Microsoft sign-in: {e}"))?;
-    let flow = auth.device_code().await.map_err(|e| format!("Microsoft sign-in request failed: {e}"))?;
+    // Use NOVA's approved public-client app and the authorization-code + PKCE flow.
+    // Microsoft opens the normal account sign-in page; the loopback callback returns
+    // the authorization response directly to this desktop app (no device code).
+    let auth = Authenticator::with_client_id(MICROSOFT_CLIENT_ID)
+        .map_err(|e| format!("Could not start Microsoft sign-in: {e}"))?;
+    let listener = TcpListener::bind(("127.0.0.1", 0))
+        .map_err(|e| format!("Could not start the local Microsoft sign-in callback: {e}"))?;
+    let port = listener.local_addr()
+        .map_err(|e| format!("Could not prepare the Microsoft sign-in callback: {e}"))?
+        .port();
+    let redirect_uri = format!("http://localhost:{port}");
+    let request = auth.authorize_request_with_redirect(redirect_uri.clone());
+    let login_url = request.url.clone();
 
-    let login_url = flow.verification_uri_complete();
     app.emit("nova-login-link", login_url.clone())
         .map_err(|e| format!("Could not show the Microsoft sign-in link: {e}"))?;
-    // Open the system browser automatically; the frontend also displays the URL as a fallback.
-    let _ = webbrowser::open(&login_url);
+    webbrowser::open(&login_url)
+        .map_err(|e| format!("Could not open the Microsoft sign-in page: {e}"))?;
 
-    let account = flow.wait().await.map_err(|e| format!("Microsoft sign-in failed: {e}"))?;
+    let redirect_url = tokio::task::spawn_blocking(move || -> Result<String, String> {
+        let (stream, _) = listener.accept()
+            .map_err(|e| format!("Could not receive Microsoft's sign-in response: {e}"))?;
+        let mut reader = BufReader::new(stream);
+        let mut first_line = String::new();
+        reader.read_line(&mut first_line)
+            .map_err(|e| format!("Could not read Microsoft's sign-in response: {e}"))?;
+        let mut stream = reader.into_inner();
+
+        let target = first_line.split_whitespace().nth(1)
+            .ok_or_else(|| "Microsoft returned an invalid sign-in response.".to_string())?;
+        if !target.starts_with('/') || target.starts_with("//") {
+            return Err("Microsoft returned an unsafe sign-in callback URL.".into());
+        }
+
+        let body = "<!doctype html><html><head><meta charset=\"utf-8\"><title>NOVA Client</title></head><body style=\"font-family:Segoe UI,sans-serif;background:#10131c;color:#f5f7fb;display:grid;place-items:center;min-height:90vh\"><main><h2>Microsoft sign-in complete</h2><p>You can close this tab and return to NOVA Client.</p></main></body></html>";
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/html; charset=utf-8\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{}",
+            body.len(), body
+        );
+        stream.write_all(response.as_bytes())
+            .map_err(|e| format!("Could not finish the Microsoft sign-in callback: {e}"))?;
+        Ok(format!("{redirect_uri}{target}"))
+    }).await.map_err(|e| format!("Microsoft sign-in callback stopped unexpectedly: {e}"))??;
+
+    // AuthorizeRequest validates the OAuth state and PKCE verifier before exchanging the code.
+    let account = request.login(&auth, &redirect_url).await
+        .map_err(|e| format!("Microsoft sign-in failed: {e}"))?;
     let account_json = serde_json::to_string(&account)
         .map_err(|e| format!("Could not prepare the signed-in account: {e}"))?;
     credential_entry(MINECRAFT_ACCOUNT_USER)?
