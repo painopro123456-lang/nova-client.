@@ -312,6 +312,7 @@ export default function App() {
       offComplete = await listen("nova-login-complete", event => { if (alive) { setSignedIn(true); setAccountName(event.payload); setLoginUrl(""); setMessage("Microsoft account connected."); } });
       offGameExit=await listen("nova-game-exit",event=>{if(alive){const code=event.payload?.exitCode;setGameExit(code===0?"Minecraft closed normally.":"Minecraft exited with code "+(code??"unknown")+". Check the game log for details.");}});
       offPackProgress=await listen("nova-pack-progress",event=>{if(!alive)return;const progress=event.payload||{};const saved=readStored("nova.activeInstall",null,v=>v&&typeof v==="object");if(saved)writeStored("nova.activeInstall",{...saved,progress:typeof progress.percent==="number"?progress.percent:null,status:progress.phase==="preparing"?"Preparing Minecraft":progress.phase==="archive"?"Downloading modpack archive":"Downloading modpack files",detail:progress.detail||saved.detail});});
+      if(!alive){offLink?.();offComplete?.();offGameExit?.();offPackProgress?.();return;}
       try {
         const name = await invoke("minecraft_account_name");
         if (alive && name) { setSignedIn(true); setAccountName(name); }

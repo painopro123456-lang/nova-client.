@@ -6,7 +6,7 @@ Only check an item after its code change is committed and the relevant build/tes
 - [ ] 01. Prevent duplicate launches of the same instance.
 - [ ] 02. Track game process exit and surface exit status.
 - [ ] 03. Replace fixed 4 GB RAM with configurable allocation.
-- [ ] 04. Keep install progress and result available when navigating between pages.
+- [x] 04. Keep install progress and result available when navigating between pages.
 - [ ] 05. Clean up interrupted/failed installs without deleting a prior working install.
 - [ ] 06. Recover installed instances by scanning their on-disk metadata at startup.
 - [ ] 07. Do not lose installed instances when localStorage is cleared.
@@ -26,14 +26,14 @@ Only check an item after its code change is committed and the relevant build/tes
 - [ ] 19. Check available disk space before large installs.
 
 ## Catalog and interface
-- [ ] 20. Prevent stale search results from remaining clickable during provider/search changes.
-- [ ] 21. Disable pagination beyond the final page.
-- [ ] 22. Validate localStorage data shapes before rendering.
-- [ ] 23. Show the signed-in account in the profile UI.
-- [ ] 24. Provide a working sign-out control.
+- [x] 20. Prevent stale search results from remaining clickable during provider/search changes.
+- [x] 21. Disable pagination beyond the final page.
+- [x] 22. Validate localStorage data shapes before rendering.
+- [x] 23. Show the signed-in account in the profile UI.
+- [x] 24. Provide a working sign-out control.
 - [ ] 25. Replace the settings placeholder with functional settings.
 - [ ] 26. Replace or clearly label the PvP placeholder.
-- [ ] 27. Keep progress event handling alive while the catalog screen is unmounted.
+- [x] 27. Keep progress event handling alive while the catalog screen is unmounted.
 
 ## Microsoft authentication and security
 - [ ] 28. Bound OAuth callback socket reads with a timeout.
