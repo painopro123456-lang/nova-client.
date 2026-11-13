@@ -21,9 +21,7 @@ public final class NovaHud {
 
         if (NovaModules.enabled("FPS")) {
             String value = client.getFps() + " FPS";
-            graphics.fill(8, 8, 86, 29, PANEL);
-            graphics.fill(8, 8, 11, 29, ACCENT);
-            graphics.text(client.font, value, 17, 14, TEXT, true);
+            drawPanel(graphics, 8, 8, value, TEXT);
         }
 
         if (NovaModules.enabled("Keystrokes")) {
@@ -34,11 +32,41 @@ public final class NovaHud {
         }
 
         if (NovaModules.enabled("Clock")) {
-            String value = LocalTime.now().format(CLOCK);
-            graphics.fill(8, 88, 86, 109, PANEL);
-            graphics.fill(8, 88, 11, 109, ACCENT);
-            graphics.text(client.font, value, 17, 94, MUTED, true);
+            drawPanel(graphics, 8, 88, LocalTime.now().format(CLOCK), MUTED);
         }
+
+        if (NovaModules.enabled("Coordinates")) {
+            var position = client.player.blockPosition();
+            String value = "XYZ  " + position.getX() + " / " + position.getY() + " / " + position.getZ();
+            drawPanel(graphics, 8, 116, value, TEXT);
+        }
+
+        if (NovaModules.enabled("Direction")) {
+            float yaw = client.player.getYRot();
+            String direction = directionFromYaw(yaw);
+            drawPanel(graphics, 8, 144, "Facing  " + direction, MUTED);
+        }
+    }
+
+    private static String directionFromYaw(float yaw) {
+        int index = Math.floorMod(Math.round(yaw / 45.0f), 8);
+        return switch (index) {
+            case 0 -> "S";
+            case 1 -> "SW";
+            case 2 -> "W";
+            case 3 -> "NW";
+            case 4 -> "N";
+            case 5 -> "NE";
+            case 6 -> "E";
+            default -> "SE";
+        };
+    }
+
+    private static void drawPanel(GuiGraphicsExtractor graphics, int x, int y, String value, int color) {
+        int width = Math.max(78, Minecraft.getInstance().font.width(value) + 18);
+        graphics.fill(x, y, x + width, y + 21, PANEL);
+        graphics.fill(x, y, x + 3, y + 21, ACCENT);
+        graphics.text(Minecraft.getInstance().font, value, x + 9, y + 7, color, true);
     }
 
     private static void drawKey(GuiGraphicsExtractor graphics, int x, int y, String label, boolean down) {
