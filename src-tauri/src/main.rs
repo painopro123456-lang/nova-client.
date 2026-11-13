@@ -1162,7 +1162,7 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{curseforge_loader_matches, safe_instance_name, safe_relative_path};
+    use super::{curseforge_loader_matches, safe_instance_name, safe_relative_path, InstanceReservation, TEMP_FILE_COUNTER};
 
     #[test]
     fn instance_names_strip_unsafe_characters() {
@@ -1195,6 +1195,15 @@ mod tests {
         assert!(curseforge_loader_matches(0, "fabric"));
         assert!(!curseforge_loader_matches(1, "fabric"));
         assert!(!curseforge_loader_matches(4, "forge"));
+    }
+
+    #[test]
+    fn instance_reservations_prevent_conflicting_operations_and_release() {
+        let key = format!("reservation-test-{}", TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let first = InstanceReservation::acquire(key.clone()).unwrap();
+        assert!(InstanceReservation::acquire(key.clone()).is_err());
+        drop(first);
+        assert!(InstanceReservation::acquire(key).is_ok());
     }
 
     #[test]
