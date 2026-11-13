@@ -455,6 +455,7 @@ const MAX_ARCHIVE_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 const MAX_PACK_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 static ACTIVE_LAUNCHES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+static ACTIVE_GAME_PIDS: OnceLock<Mutex<std::collections::HashMap<String, u32>>> = OnceLock::new();
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 struct InstanceReservation {
@@ -971,12 +972,20 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
             game_log(&format!("Minecraft failed to install or start: {error}"));
             format!("Minecraft could not be installed or started: {error}")
         })?;
-    game_log(&format!("Minecraft process started successfully (pid {:?}).", child.id()));
+    let game_pid = child.id().ok_or("Minecraft started but its process ID could not be read.")?;
+    game_log(&format!("Minecraft process started successfully (pid {game_pid})."));
+    ACTIVE_GAME_PIDS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+        .lock().map_err(|_| "Could not register the running Minecraft process.")?
+        .insert(launch_key.clone(), game_pid);
+    let process_key = launch_key.clone();
 
     // Keep the reservation alive until the game exits; dropping it releases the lock.
     tokio::spawn(async move {
         let _reservation = reservation;
         let exit = child.wait().await;
+        if let Some(pids) = ACTIVE_GAME_PIDS.get() {
+            if let Ok(mut pids) = pids.lock() { pids.remove(&process_key); }
+        }
         let (success, code) = match exit {
             Ok(status) => (status.success(), status.code()),
             Err(error) => {
@@ -993,6 +1002,31 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
     Ok(())
 }
 
+
+#[tauri::command]
+fn stop_minecraft(instance_name: String) -> Result<(), String> {
+    let key = safe_instance_name(&instance_name)?;
+    let pid = ACTIVE_GAME_PIDS.get()
+        .and_then(|pids| pids.lock().ok().and_then(|pids| pids.get(&key).copied()))
+        .ok_or("This modpack does not have a running Minecraft process.")?;
+    game_log(&format!("Stop requested for Minecraft instance '{key}' (pid {pid})."));
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output()
+            .map_err(|error| format!("Could not stop Minecraft: {error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(if detail.is_empty() { "Windows could not stop the Minecraft process.".into() } else { detail });
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        return Err("Stopping Minecraft is currently supported on Windows only.".into());
+    }
+    Ok(())
+}
 
 fn emit_pack_progress(app: &tauri::AppHandle, phase: &str, completed: u64, total: u64, detail: &str) {
     let percent = if total > 0 { Some(((completed as f64 / total as f64) * 90.0).round() as u32) } else { None };
@@ -2358,6 +2392,7 @@ fn main() {
             get_game_logs,
             minecraft_versions,
             launch_minecraft,
+            stop_minecraft,
             prepare_modpack_instance,
             install_modrinth_modpack,
             curseforge_modpack_versions,
