@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use crust_core::authenticator::{Account, Authenticator};
+use crust_core::foundation::events::Event;
 use crust_core::launcher::{Launch, LaunchOptions, LoaderKind};
 use keyring::Entry;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
@@ -10,7 +11,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::fs::OpenOptions;
 use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
+use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
 use tauri::Emitter;
@@ -24,9 +25,81 @@ const NOVA_RELEASES_API: &str = "https://api.github.com/repos/painopro123456-lan
 const NOVA_INSTALLER_ASSET: &str = "NOVA-Client-Setup.exe";
 const MAX_UPDATER_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
 
-fn updater_log_path() -> PathBuf {
+fn logs_directory() -> PathBuf {
     let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
-    base.join("NOVA Client").join("logs").join("updater.log")
+    base.join("NOVA Client").join("logs")
+}
+
+fn updater_log_path() -> PathBuf {
+    logs_directory().join("updater.log")
+}
+
+fn game_log_path() -> PathBuf {
+    logs_directory().join("game-launch.log")
+}
+
+fn game_log(message: &str) {
+    let path = game_log_path();
+    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let safe_message = message.replace('\r', " ").replace('\n', " ");
+        let _ = writeln!(file, "[unix:{timestamp}] {safe_message}");
+    }
+}
+
+fn tail_file(path: &Path, max_lines: usize) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            let lines: Vec<&str> = contents.lines().collect();
+            let start = lines.len().saturating_sub(max_lines);
+            lines[start..].join("\n")
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "No Minecraft log has been created yet. Launch the game once to generate logs/latest.log.".into(),
+        Err(error) => format!("Could not read log file {}: {error}", path.display()),
+    }
+}
+
+#[tauri::command]
+fn get_game_logs(instance_name: Option<String>) -> Result<Value, String> {
+    let local_app_data = std::env::var("LOCALAPPDATA")
+        .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
+    let root = PathBuf::from(local_app_data).join("NOVA Client").join("minecraft");
+    let game_dir = if let Some(name) = instance_name.as_deref() {
+        root.join("instances").join(safe_instance_name(name)?)
+    } else {
+        root
+    };
+    let minecraft_log_path = game_dir.join("logs").join("latest.log");
+    Ok(json!({
+        "launcherLog": tail_file(&game_log_path(), 300),
+        "minecraftLog": tail_file(&minecraft_log_path, 500),
+        "launcherLogPath": game_log_path().display().to_string(),
+        "minecraftLogPath": minecraft_log_path.display().to_string()
+    }))
+}
+
+fn game_event_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
+    let last_progress = Mutex::new(Instant::now() - Duration::from_secs(2));
+    Arc::new(move |event| match event {
+        Event::Progress { downloaded, total, element } => {
+            if let Ok(mut last) = last_progress.lock() {
+                if last.elapsed() >= Duration::from_secs(2) || (total > 0 && downloaded >= total) {
+                    game_log(&format!("Download: {element} ({downloaded}/{total} bytes)"));
+                    *last = Instant::now();
+                }
+            }
+        }
+        Event::Check { checked, total, element } => {
+            if checked == total || checked % 500 == 0 {
+                game_log(&format!("Check: {element} ({checked}/{total})"));
+            }
+        }
+        Event::Extract(message) => game_log(&format!("Extract: {message}")),
+        Event::Patch(message) => game_log(&format!("Patch: {message}")),
+        Event::Error(message) => game_log(&format!("Launcher error: {message}")),
+        Event::Speed(_) | Event::Estimated(_) => {}
+    })
 }
 
 fn updater_log(message: &str) {
@@ -166,10 +239,18 @@ static AUTH_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new
 
 async fn refresh_saved_minecraft_account(saved_account: &Account) -> Result<Account, String> {
     let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
-    let auth = Authenticator::new()
+    // Refresh with the same public client ID used for the original OAuth/PKCE
+    // sign-in. Using Authenticator::new() here switches client IDs and can make
+    // a valid saved Microsoft refresh token look like the user is signed out.
+    let auth = Authenticator::with_client_id(MICROSOFT_CLIENT_ID)
         .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
+    game_log("Refreshing saved Microsoft/Minecraft session.");
     let account = auth.refresh(saved_account).await
-        .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
+        .map_err(|e| {
+            game_log(&format!("Microsoft session refresh failed: {e}"));
+            format!("Microsoft session could not be refreshed. Sign in again: {e}")
+        })?;
+    game_log("Saved Microsoft/Minecraft session refreshed successfully.");
     let refreshed_json = serde_json::to_string(&account)
         .map_err(|e| format!("Could not update the saved account: {e}"))?;
     credential_entry(MINECRAFT_ACCOUNT_USER)?
@@ -458,7 +539,10 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
     // into the selected instance without starting the game.
     let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
         .get_password()
-        .map_err(|_| "Sign in with Microsoft before completing the modpack installation.".to_string())?;
+        .map_err(|error| {
+            game_log(&format!("Modpack preparation could not read the saved Microsoft account: {error}"));
+            "NOVA could not read the saved Microsoft account from Windows Credential Manager. Sign out and sign in again, then retry.".to_string()
+        })?;
     let saved_account: Account = serde_json::from_str(&account_json)
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
     let account = refresh_saved_minecraft_account(&saved_account).await?;
@@ -489,10 +573,16 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
     // user launches the instance.
     options.download_concurrency = 8;
 
+    game_log(&format!("Preparing modpack instance '{name}' for Minecraft {version} ({loader})."));
     let launch = Launch::new(options, account)
-        .map_err(|e| format!("Could not prepare modpack installation: {e}"))?;
+        .map_err(|e| format!("Could not prepare modpack installation: {e}"))?
+        .with_events(game_event_logger());
     launch.prepare().await
-        .map_err(|e| format!("Minecraft or mod-loader installation failed: {e}"))?;
+        .map_err(|e| {
+            game_log(&format!("Modpack Minecraft preparation failed: {e}"));
+            format!("Minecraft or mod-loader installation failed: {e}")
+        })?;
+    game_log(&format!("Modpack instance '{name}' is prepared."));
     emit_pack_progress(&app, "ready", 1, 1, "Minecraft and mod loader are ready");
 
     Ok(json!({
@@ -545,7 +635,10 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
 
     let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
         .get_password()
-        .map_err(|_| "Sign in with your Microsoft account before launching Minecraft.".to_string())?;
+        .map_err(|error| {
+            game_log(&format!("Launch could not read the saved Microsoft account: {error}"));
+            "NOVA could not read the saved Microsoft account from Windows Credential Manager. Sign out and sign in again, then retry.".to_string()
+        })?;
     let saved_account: Account = serde_json::from_str(&account_json)
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
     let account = refresh_saved_minecraft_account(&saved_account).await?;
@@ -582,10 +675,16 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
     options.memory.max = format!("{memory_mb}M");
     options.download_concurrency = 8;
 
+    game_log(&format!("Starting Minecraft {version} ({loader}) in profile '{}'.", instance_name.as_deref().unwrap_or("default")));
     let launch = Launch::new(options, account)
-        .map_err(|e| format!("Could not prepare Minecraft: {e}"))?;
+        .map_err(|e| format!("Could not prepare Minecraft: {e}"))?
+        .with_events(game_event_logger());
     let mut child = launch.run().await
-        .map_err(|error| format!("Minecraft could not be installed or started: {error}"))?;
+        .map_err(|error| {
+            game_log(&format!("Minecraft failed to install or start: {error}"));
+            format!("Minecraft could not be installed or started: {error}")
+        })?;
+    game_log(&format!("Minecraft process started successfully (pid {:?}).", child.id()));
 
     // Keep the reservation alive until the game exits; dropping it releases the lock.
     tokio::spawn(async move {
@@ -593,8 +692,12 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         let exit = child.wait().await;
         let (success, code) = match exit {
             Ok(status) => (status.success(), status.code()),
-            Err(_) => (false, None),
+            Err(error) => {
+                game_log(&format!("Could not wait for Minecraft process: {error}"));
+                (false, None)
+            }
         };
+        game_log(&format!("Minecraft process exited: success={success}, exit_code={code:?}."));
         let _ = app.emit("nova-game-exit", json!({"success":success,"code":code}));
     });
     Ok(())
@@ -1674,6 +1777,7 @@ fn main() {
             check_for_updates,
             install_update,
             get_updater_logs,
+            get_game_logs,
             minecraft_versions,
             launch_minecraft,
             prepare_modpack_instance,
