@@ -313,6 +313,9 @@ function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateErr
       <p>{updateInfo ? (updateInfo.available ? "Version "+updateInfo.latestVersion+" is available. Your current version is "+updateInfo.currentVersion+"." : "You're running the latest published version ("+updateInfo.currentVersion+").") : "Check GitHub for the latest official NOVA release."}</p>
       {updateInfo?.available && <div className="catalog-note"><b>Release notes</b><p style={{whiteSpace:"pre-wrap",marginTop:8}}>{updateInfo.releaseNotes}</p></div>}
       {updateError && <div className="catalog-note error">{updateError}</div>}
+      <div className="section-heading"><div><div className="eyebrow">DIAGNOSTICS</div><h2>Updater logs</h2></div><button className="secondary-btn" onClick={refreshUpdaterLogs}>Refresh logs</button></div>
+      <pre className="catalog-note" style={{whiteSpace:"pre-wrap",overflowWrap:"anywhere",maxHeight:240,overflowY:"auto",fontSize:12,lineHeight:1.6}}>{updaterLogs}</pre>
+      <span className="feature-status">LOG FILE: %LOCALAPPDATA%\NOVA Client\logs\updater.log</span>
       <div className="pack-install-row">
         <button className="secondary-btn" onClick={onCheckUpdates} disabled={updateBusy}>{updateBusy?"Checking…":"Check for updates"}</button>
         {updateInfo?.available && <button className="primary-btn" onClick={onInstallUpdate} disabled={updateBusy}><ArrowDownToLine size={14}/>{updateBusy?"Preparing update…":"Download & install"}</button>}
@@ -365,27 +368,33 @@ export default function App() {
   const [loaderType, setLoaderType] = useState("vanilla");
   const [memoryMb, setMemoryMb] = useState(()=>{try{const n=Number(localStorage.getItem("nova.ramMb")||4096);return [2048,3072,4096,6144,8192].includes(n)?n:4096;}catch{return 4096;}});
   useEffect(()=>{try{localStorage.setItem("nova.ramMb",String(memoryMb));}catch{}},[memoryMb]);
+  useEffect(() => { refreshUpdaterLogs(); }, []);
   useEffect(() => {
     let alive = true;
     invoke("check_for_updates").then(info => { if (alive) { setUpdateInfo(info); setUpdateError(""); } })
       .catch(error => { if (alive) setUpdateError(typeof error === "string" ? error : (error.message || "Could not check for updates.")); });
     return () => { alive = false; };
   }, []);
+  const refreshUpdaterLogs = async () => {
+    try { setUpdaterLogs(await invoke("get_updater_logs")); }
+    catch (error) { setUpdaterLogs(typeof error === "string" ? error : (error.message || "Could not load updater logs.")); }
+  };
   const handleCheckUpdates = async () => {
     setUpdateBusy(true); setUpdateError("");
     try { setUpdateInfo(await invoke("check_for_updates")); }
     catch (error) { setUpdateError(typeof error === "string" ? error : (error.message || "Could not check for updates.")); }
-    finally { setUpdateBusy(false); }
+    finally { setUpdateBusy(false); refreshUpdaterLogs(); }
   };
   const handleInstallUpdate = async () => {
     setUpdateBusy(true); setUpdateError("");
     try { await invoke("install_update"); }
-    catch (error) { setUpdateError(typeof error === "string" ? error : (error.message || "Could not install the update.")); setUpdateBusy(false); }
+    catch (error) { setUpdateError(typeof error === "string" ? error : (error.message || "Could not install the update.")); setUpdateBusy(false); refreshUpdaterLogs(); }
   };
   const [launching, setLaunching] = useState(false);
   const [updateInfo, setUpdateInfo] = useState(null);
   const [updateBusy, setUpdateBusy] = useState(false);
   const [updateError, setUpdateError] = useState("");
+  const [updaterLogs, setUpdaterLogs] = useState("Loading updater logs…");
   const [signedIn, setSignedIn] = useState(false);
   const [accountName, setAccountName] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
