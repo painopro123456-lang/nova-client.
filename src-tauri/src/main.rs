@@ -513,14 +513,7 @@ fn extract_pack_overrides(archive_path: &Path, prefix: &str, destination: &Path)
                 std::io::copy(&mut entry, &mut file)
                     .map_err(|e| format!("Could not extract pack override: {e}"))?;
                 file.flush().map_err(|e| format!("Could not flush pack override: {e}"))?;
-                // std::fs::rename does not replace an existing destination on Windows.
-                // Modpack overrides commonly replace default config files, so remove the
-                // old file first and then move the fully-written temporary file into place.
-                if output.exists() {
-                    std::fs::remove_file(&output)
-                        .map_err(|e| format!("Could not replace existing pack override: {e}"))?;
-                }
-                std::fs::rename(&temporary, &output)
+                replace_file(&temporary, &output)
                     .map_err(|e| format!("Could not finalize pack override: {e}"))?;
                 Ok(())
             })();
@@ -965,6 +958,20 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
         (match key { "fabric-loader"=>"fabric", "quilt-loader"=>"quilt", "legacy-fabric"=>"legacyfabric", other=>other }.to_owned(), build.to_owned())
     } else { ("vanilla".to_owned(), String::new()) };
     let pack_files = index["files"].as_array().ok_or("Modrinth manifest has no files list.")?;
+    if pack_files.len() > MAX_ARCHIVE_ENTRIES {
+        return Err("The Modrinth manifest contains too many files and was blocked for safety.".into());
+    }
+    let declared_download_bytes = pack_files.iter()
+        .filter(|item| item["env"]["client"].as_str() != Some("unsupported"))
+        .try_fold(0u64, |total, item| {
+            let size = item["fileSize"].as_u64()
+                .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+                .ok_or_else(|| "A Modrinth file has missing or invalid size metadata.".to_string())?;
+            total.checked_add(size).ok_or_else(|| "Modrinth pack download size overflowed.".to_string())
+        })?;
+    if declared_download_bytes > MAX_ARCHIVE_TOTAL_BYTES {
+        return Err("The Modrinth pack's required downloads exceed NOVA's 2 GiB safety limit.".into());
+    }
     let total_files = pack_files.iter().filter(|item| item["env"]["client"].as_str() != Some("unsupported")).count() as u64;
     let mut completed_files = 0u64;
     emit_pack_progress(&app, "files", 0, total_files, "Downloading Modrinth files");
@@ -1106,7 +1113,11 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         .and_then(|v| v["id"].as_str());
     let (loader, loader_build) = if let Some(id) = loader_entry { loader_from_id(id)? } else { ("vanilla".into(), String::new()) };
     let pack_files = manifest["files"].as_array().ok_or("CurseForge manifest has no files list.")?;
+    if pack_files.len() > MAX_ARCHIVE_ENTRIES {
+        return Err("The CurseForge manifest contains too many files and was blocked for safety.".into());
+    }
     let total_files = pack_files.iter().filter(|item| item["required"].as_bool() != Some(false)).count() as u64;
+    let mut total_download_bytes = 0u64;
     let mut completed_files = 0u64;
     emit_pack_progress(&app, "files", 0, total_files, "Downloading CurseForge files");
     for (i, item) in pack_files.iter().enumerate() {
@@ -1131,7 +1142,13 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
             return Err(format!("CurseForge returned mismatched metadata for mod {project}/{file}."));
         }
         let expected_size = details["fileLength"].as_u64()
-            .ok_or_else(|| format!("CurseForge did not provide the expected size for mod {project}/{file}."))?;
+            .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+            .ok_or_else(|| format!("CurseForge did not provide a valid size for mod {project}/{file}."))?;
+        total_download_bytes = total_download_bytes.checked_add(expected_size)
+            .ok_or("CurseForge pack download size overflowed.")?;
+        if total_download_bytes > MAX_ARCHIVE_TOTAL_BYTES {
+            return Err("The CurseForge pack's required downloads exceed NOVA's 2 GiB safety limit.".into());
+        }
         let expected_sha1 = details["hashes"].as_array()
             .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
             .and_then(|hash| hash["value"].as_str())
@@ -1149,11 +1166,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
             let _ = std::fs::remove_file(&staging);
             return Err(error);
         }
-        if destination.exists() {
-            let _ = std::fs::remove_file(&staging);
-            return Err(format!("CurseForge mod {project}/{file} is already present in the modpack folder."));
-        }
-        std::fs::rename(&staging, &destination).map_err(|e| {
+        replace_file(&staging, &destination).map_err(|e| {
             let _ = std::fs::remove_file(&staging);
             format!("Could not finalize CurseForge mod {}: {e}", i+1)
         })?;
