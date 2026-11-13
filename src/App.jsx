@@ -394,7 +394,7 @@ function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateErr
     <div className="feature-card updater-card">
       <div className="feature-icon blue"><ArrowDownToLine size={18}/></div>
       <b>{updateInfo?.available ? "A new NOVA version is ready" : "Keep NOVA up to date"}</b>
-      <p>{updateInfo ? (updateInfo.available ? "Version "+updateInfo.latestVersion+" is available. Your current version is "+updateInfo.currentVersion+"." : "You're running the latest published version ("+updateInfo.currentVersion+").") : "Check GitHub for the latest official NOVA release."}</p>
+      <p>{updateInfo ? (updateInfo.available ? "Version "+updateInfo.latestVersion+" is available. Your current version is "+updateInfo.currentVersion+"." : (updateInfo.releasePublished === false ? "NOVA has not published its first release yet. Automatic updates will activate after a release is published." : "You're running the latest published version ("+updateInfo.currentVersion+").")) : "Check GitHub for the latest official NOVA release."}</p>
       {updateInfo?.available && <div className="catalog-note"><b>Release notes</b><p style={{whiteSpace:"pre-wrap",marginTop:8}}>{updateInfo.releaseNotes}</p></div>}
       {updateError && <div className="catalog-note error">{updateError}</div>}
       <div className="section-heading"><div><div className="eyebrow">DIAGNOSTICS</div><h2>Updater logs</h2></div><button className="secondary-btn" onClick={refreshUpdaterLogs}>Refresh logs</button></div>
