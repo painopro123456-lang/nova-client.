@@ -28,12 +28,12 @@ function Sidebar({ page, setPage, signedIn, accountName, onSignOut }) {
   </aside>;
 }
 
-function Topbar({ title, subtitle }) {
+function Topbar({ title, subtitle, onShowDownloads }) {
   const win = getCurrentWindow();
   return <header className="topbar">
     <div className="topbar-title" data-tauri-drag-region><div className="eyebrow">NOVA / {title.toUpperCase()}</div><h1>{title}</h1><p>{subtitle}</p></div>
     <div className="top-actions">
-      <button className="icon-btn" title="Notifications"><Bell size={17}/><i/></button>
+      <button className="icon-btn" title="Show download progress" onClick={onShowDownloads}><Bell size={17}/><i/></button>
       <div className="top-avatar">G</div>
       <div className="window-controls">
         <button title="Minimize" onClick={() => win.minimize()}><span>−</span></button>
@@ -59,7 +59,7 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versi
 }
 
 
-function Catalog({ packs, active, memoryMb, signedIn }) {
+function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallDialog }) {
   const [q,setQ]=useState("");
   const [provider,setProvider]=useState("modrinth");
   const [hits,setHits]=useState([]);
@@ -74,7 +74,6 @@ function Catalog({ packs, active, memoryMb, signedIn }) {
   const [packVersions,setPackVersions]=useState([]);
   const [packVersionsBusy,setPackVersionsBusy]=useState(false);
   const [selectedPackVersion,setSelectedPackVersion]=useState("");
-  const [installDialog,setInstallDialog]=useState(null);
   const [targetInstances,setTargetInstances]=useState([]);
   const [selectedTargetInstance,setSelectedTargetInstance]=useState("");
 
@@ -106,21 +105,6 @@ function Catalog({ packs, active, memoryMb, signedIn }) {
   },[q,packs,provider,page,active]);
 
   useEffect(()=>{try{localStorage.setItem("nova.installedPacks",JSON.stringify(installed))}catch(e){setPackActionMessage("Could not save installed modpack list: "+(e.message||e))}},[installed]);
-  useEffect(()=>{
-    let alive=true;
-    let unlisten;
-    listen("nova-pack-progress",event=>{
-      const progress=event.payload||{};
-      setInstallDialog(current=>current?{
-        ...current,
-        progress:typeof progress.percent==="number"?progress.percent:null,
-        status:progress.phase==="preparing"?"Preparing Minecraft":progress.phase==="archive"?"Downloading modpack archive":current.status==="Installing mod"?"Downloading mod":"Downloading modpack files",
-        detail:progress.detail||current.detail
-      }:current);
-    }).then(stop=>{if(alive)unlisten=stop;else stop();});
-    return()=>{alive=false;unlisten?.();};
-  },[]);
-
   const choosePackVersion=async(project)=>{
     setVersionProject(project);setPackVersions([]);setSelectedPackVersion("");setPackVersionsBusy(true);setPackActionMessage("");
     if(!packs){
@@ -242,24 +226,6 @@ function Catalog({ packs, active, memoryMb, signedIn }) {
         ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":signedIn?"Install & Play":"Downloaded · Sign in to play"}</button>
         : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :packs?"Choose version":"Install to instance"}</button>}</div>
     </article>)}</div>}
-    {installDialog&&<div className="pack-version-backdrop install-progress-backdrop" role="presentation">
-      <section className="pack-version-dialog install-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="install-progress-title">
-        <div className="eyebrow">NOVA / {packs?"MODPACK":"MOD"} INSTALLER</div>
-        <h3 id="install-progress-title">{installDialog.done?(installDialog.error?"Installation stopped":"You're all set"):(packs?"Installing your modpack":"Installing your mod")}</h3>
-        <p className="install-progress-name">{installDialog.name}</p>
-        <div className="install-progress-track"><div className={"install-progress-fill"+(!installDialog.done?" is-active":"")} style={{width:(installDialog.done?100:(typeof installDialog.progress==="number"?installDialog.progress:32))+"%"}}/></div>
-        <div className="install-progress-percent">{typeof installDialog.progress==="number"?installDialog.progress+"%":"Working…"}</div>
-        <div className="install-progress-status"><span className={installDialog.done?(installDialog.error?"progress-failed":"progress-complete"):"progress-running"}>{installDialog.done?(installDialog.error?"!":"✓"):""}</span><b>{installDialog.status}</b></div>
-        <p className="install-progress-detail">{installDialog.detail}</p>
-        {packs?<div className="install-progress-steps">
-          <div className={installDialog.step>=0?"complete":""}><span>1</span><label>Modpack files</label></div>
-          <div className={installDialog.step>=1?"complete":""}><span>2</span><label>Minecraft & Java</label></div>
-          <div className={installDialog.step>=2?"complete":""}><span>3</span><label>Ready to play</label></div>
-        </div>:<div className="install-progress-steps"><div className={installDialog.step>=2?"complete":""}><span>1</span><label>Mod installed</label></div></div>}
-        {installDialog.error&&<div className="install-progress-error">{installDialog.error}</div>}
-        {installDialog.done&&<div className="pack-version-actions"><button className="primary-btn" onClick={()=>setInstallDialog(null)}>Close</button></div>}
-      </section>
-    </div>}
     {versionProject&&<div className="pack-version-backdrop" role="presentation" onClick={()=>!packVersionsBusy&&setVersionProject(null)}>
       <section className="pack-version-dialog" role="dialog" aria-modal="true" aria-labelledby="pack-version-title" onClick={e=>e.stopPropagation()}>
         <div className="eyebrow">{packs?"MODPACK INSTALLER":"MOD INSTALLER"}</div><h3 id="pack-version-title">Choose a version</h3><p>{packs?"Select the exact modpack release you want NOVA to install. The Minecraft version and mod loader are included in each option.":"Choose the instance and exact mod release. NOVA checks Minecraft and loader compatibility before saving the JAR."}</p>
@@ -372,12 +338,31 @@ function EmptyPage({ page, setPage }) {
 
 export default function App() {
   const [page, setPage] = useState("home");
+  const [installDialog, setInstallDialog] = useState(null);
+  const [downloadToastVisible, setDownloadToastVisible] = useState(false);
+  const [downloadDetailsOpen, setDownloadDetailsOpen] = useState(false);
+  const updateInstallDialog = (next) => { setInstallDialog(next); setDownloadToastVisible(true); };
   const [selectedVersion, setSelectedVersion] = useState("");
   const [versions, setVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(true);
   const [loaderType, setLoaderType] = useState("vanilla");
   const [memoryMb, setMemoryMb] = useState(()=>{try{const n=Number(localStorage.getItem("nova.ramMb")||4096);return [2048,3072,4096,6144,8192].includes(n)?n:4096;}catch{return 4096;}});
   useEffect(()=>{try{localStorage.setItem("nova.ramMb",String(memoryMb));}catch{}},[memoryMb]);
+  useEffect(()=>{
+    let alive=true;
+    let unlisten;
+    listen("nova-pack-progress",event=>{
+      const progress=event.payload||{};
+      setInstallDialog(current=>current?{
+        ...current,
+        progress:typeof progress.percent==="number"?progress.percent:null,
+        status:progress.phase==="preparing"?"Preparing Minecraft":progress.phase==="archive"?"Downloading modpack archive":current.status==="Installing mod"?"Downloading mod":"Downloading modpack files",
+        detail:progress.detail||current.detail
+      }:current);
+    }).then(stop=>{if(alive)unlisten=stop;else stop();});
+    return()=>{alive=false;unlisten?.();};
+  },[]);
+
   useEffect(() => { refreshUpdaterLogs(); }, []);
   useEffect(() => {
     let alive = true;
@@ -469,5 +454,10 @@ export default function App() {
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" && <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/>}<div style={{display:page==="mods"?"block":"none"}}><Catalog packs={false} active={page==="mods"} memoryMb={memoryMb} signedIn={signedIn}/></div><div style={{display:page==="modpacks"?"block":"none"}}><Catalog packs={true} active={page==="modpacks"} memoryMb={memoryMb} signedIn={signedIn}/></div>{page === "instances" && <LocalInstances versions={versions} memoryMb={memoryMb}/>}{page === "settings" && <SettingsPage memoryMb={memoryMb} setMemoryMb={setMemoryMb} updateInfo={updateInfo} updateBusy={updateBusy} updateError={updateError} onCheckUpdates={handleCheckUpdates} onInstallUpdate={handleInstallUpdate}/>}{page === "pvp" && <PvpPage/>}{!["home","mods","modpacks","instances","settings","pvp"].includes(page) && <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle} onShowDownloads={()=>{if(installDialog){setDownloadToastVisible(true);setDownloadDetailsOpen(true);}}}/><div className="page-content">{page === "home" && <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/>}<div style={{display:page==="mods"?"block":"none"}}><Catalog packs={false} active={page==="mods"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div><div style={{display:page==="modpacks"?"block":"none"}}><Catalog packs={true} active={page==="modpacks"} memoryMb={memoryMb} signedIn={signedIn} installDialog={installDialog} setInstallDialog={updateInstallDialog}/></div>{page === "instances" && <LocalInstances versions={versions} memoryMb={memoryMb}/>}{page === "settings" && <SettingsPage memoryMb={memoryMb} setMemoryMb={setMemoryMb} updateInfo={updateInfo} updateBusy={updateBusy} updateError={updateError} onCheckUpdates={handleCheckUpdates} onInstallUpdate={handleInstallUpdate}/>}{page === "pvp" && <PvpPage/>}{!["home","mods","modpacks","instances","settings","pvp"].includes(page) && <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main>{installDialog&&downloadToastVisible&&<aside className="nova-download-toast" role="status" aria-live="polite">
+    <div className="nova-download-toast-head"><div className={"nova-download-toast-icon"+(installDialog.done?(installDialog.error?" failed":" complete"):"")}><ArrowDownToLine size={17}/></div><div className="nova-download-toast-heading"><b>{installDialog.name}</b><span>{installDialog.done?(installDialog.error?"Installation failed":"Download complete"):installDialog.status||"Downloading files"}</span></div><button className="nova-download-toast-close" title="Hide notification (download continues)" onClick={()=>setDownloadToastVisible(false)}><X size={15}/></button></div>
+    <div className="nova-download-toast-track"><div className={"nova-download-toast-fill"+(!installDialog.done?" active":"")+(installDialog.error?" failed":"")} style={{width:(installDialog.done?100:(typeof installDialog.progress==="number"?installDialog.progress:34))+"%"}}/></div>
+    <div className="nova-download-toast-foot"><span>{typeof installDialog.progress==="number"?installDialog.progress+"%":installDialog.done?"Finished":"Working in background"}</span><button onClick={()=>setDownloadDetailsOpen(v=>!v)}>{downloadDetailsOpen?"Hide details":"Details"}</button></div>
+    {downloadDetailsOpen&&<div className="nova-download-toast-details">{installDialog.detail}{installDialog.error&&<p>{installDialog.error}</p>}</div>}
+  </aside>}</div>;
 }
