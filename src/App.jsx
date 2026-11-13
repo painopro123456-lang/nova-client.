@@ -112,7 +112,7 @@ function Catalog({ packs, memoryMax, onNavigate }) {
 
   useEffect(()=>{writeStored("nova.installedPacks",installed);},[installed]);
   useEffect(()=>{
-    const refresh=()=>{const next=readStored("nova.instances",[],Array.isArray);const packs=readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v));setInstances(next);setTargetInstance(current=>current||next[0]?.instanceName||Object.values(packs)[0]?.instanceName||"");};
+    const refresh=()=>{const next=readStored("nova.instances",[],Array.isArray);const packs=readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v));setInstances(next);setTargetInstance(current=>(next.some(item=>item.instanceName===current)||Object.values(packs).some(item=>item.instanceName===current))?current:(next[0]?.instanceName||Object.values(packs)[0]?.instanceName||""));};
     window.addEventListener("nova-instances-recovered",refresh);
     return()=>window.removeEventListener("nova-instances-recovered",refresh);
   },[]);
@@ -223,7 +223,7 @@ function Catalog({ packs, memoryMax, onNavigate }) {
       </div>
     </div>
     <div className="catalog-search-row">
-      {!packs&&<div className="catalog-source-pill"><span>INSTALL INTO</span><select value={targetInstance} onChange={e=>setTargetInstance(e.target.value)} disabled={!availableInstances.length}><option value="">{availableInstances.length?"Choose instance":"No instances"}</option>{availableInstances.map(instance=><option key={instance.instanceName} value={instance.instanceName}>{instance.name||instance.instanceName}</option>)}</select></div>}
+      {!packs&&<div className="catalog-source-pill"><span>INSTALL INTO</span><select value={targetInstance} onChange={e=>setTargetInstance(e.target.value)} disabled={!availableInstances.length}><option value="">{availableInstances.length?"Choose instance":"No instances"}</option>{availableInstances.map(instance=><option key={instance.instanceName} value={instance.instanceName}>{instance.name||instance.instanceName}</option>)}</select>{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
       <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks, themes, adventures…":"Search mods, performance, shaders, utilities…"}/>{q&&<button className="clear-search" onClick={()=>setQ("")} aria-label="Clear search"><X size={14}/></button>}</div>
       <div className="catalog-source-pill"><span className="source-dot"/> {provider==="modrinth"?"MODRINTH INDEX":"CURSEFORGE API"}</div>
     </div>
@@ -289,6 +289,21 @@ function LocalInstances({ versions, memoryMax }) {
     {installedPacks.length>0&&<><div className="section-heading"><div><div className="eyebrow">INSTALLED MODPACKS</div><h2>Your library</h2></div></div>{installedPacks.map(([id,pack])=><div className="instance-entry" key={id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{pack.name}</b><span>Minecraft {pack.minecraftVersion} · {pack.loader}{pack.loaderVersion?" "+pack.loaderVersion:""} · {pack.source}</span></div><button className="primary-btn" onClick={()=>playPack(pack)}><Play size={13} fill="currentColor"/> Play</button><button className="delete-entry" onClick={()=>removePack(id,pack)}>Delete</button></div>)}</>}
     <div className="section-heading"><div><div className="eyebrow">CUSTOM PROFILES</div><h2>Organize versions</h2></div></div><div className="instance-create"><input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Instance name"/><select value={version} onChange={e=>setVersion(e.target.value)} disabled={!version||versions.length===0}>{versions.map(v=><option key={v.id} value={v.id}>{v.id}{v.type==="snapshot"?" · Snapshot":""}</option>)}</select><select value={loader} onChange={e=>setLoader(e.target.value)}><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="quilt">Quilt</option><option value="vanilla">Vanilla</option></select><button className="primary-btn" onClick={add} disabled={!name.trim()||!version}><Plus size={14}/> Create instance</button></div>{items.length===0?<div className="catalog-note">No custom profiles yet.</div>:items.map(x=><div className="instance-entry" key={x.id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{x.name}</b><span>Minecraft {x.minecraftVersion||x.version} · {x.loader||"vanilla"} · isolated instance</span></div><button className="primary-btn" onClick={()=>playPack(x)}>Install & Play</button><button className="delete-entry" onClick={()=>removePack(x.id,x)}>Delete</button></div>)}
     {action&&<div className="catalog-note">{action}</div>}
+  </section>;
+}
+
+function PvpPage({onNavigate}) {
+  const modules=[
+    ["FPS","Live frame-rate counter."],
+    ["Keystrokes","WASD and jump key display."],
+    ["Armor Status","Remaining durability for equipped armor."],
+    ["Clock","Compact in-game clock."]
+  ];
+  return <section className="local-instances">
+    <div className="eyebrow">NOVA FABRIC CLIENT</div><h2>PvP HUD toolkit</h2>
+    <p>These modules are implemented in the NOVA in-game menu. Install the NOVA Fabric 26.2 mod, enter a world, then press Right Shift to open the menu and enable the modules you want.</p>
+    <div className="instance-list">{modules.map(([name,description])=><div className="instance-card" key={name}><div><b>{name}</b><span>{description}</span></div><span className="instance-version">READY</span></div>)}</div>
+    <button className="primary-btn" onClick={()=>onNavigate("mods")}>Browse more mods</button>
   </section>;
 }
 
@@ -379,5 +394,5 @@ export default function App() {
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/>{gameExit&&<div className="catalog-note" role="status">{gameExit}<button className="text-button" onClick={()=>setGameExit("")}>Dismiss</button></div>}<div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} memoryMax={memoryMax} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false} memoryMax={memoryMax} onNavigate={setPage}/> : page === "modpacks" ? <Catalog packs={true} memoryMax={memoryMax} onNavigate={setPage}/> : page === "instances" ? <LocalInstances versions={versions} memoryMax={memoryMax}/> : page === "settings" ? <SettingsPage memoryMax={memoryMax} setMemoryMax={setMemoryMax}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/>{gameExit&&<div className="catalog-note" role="status">{gameExit}<button className="text-button" onClick={()=>setGameExit("")}>Dismiss</button></div>}<div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} memoryMax={memoryMax} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false} memoryMax={memoryMax} onNavigate={setPage}/> : page === "modpacks" ? <Catalog packs={true} memoryMax={memoryMax} onNavigate={setPage}/> : page === "instances" ? <LocalInstances versions={versions} memoryMax={memoryMax}/> : page === "settings" ? <SettingsPage memoryMax={memoryMax} setMemoryMax={setMemoryMax}/> : page === "pvp" ? <PvpPage onNavigate={setPage}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
