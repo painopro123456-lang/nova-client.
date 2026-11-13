@@ -9,6 +9,7 @@ use sha1::{Digest, Sha1};
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
+use std::time::{Duration, Instant};
 use zip::ZipArchive;
 use tauri::Emitter;
 
@@ -103,8 +104,21 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
         .map_err(|e| format!("Could not open the Microsoft sign-in page: {e}"))?;
 
     let redirect_url = tokio::task::spawn_blocking(move || -> Result<String, String> {
-        let (stream, _) = listener.accept()
-            .map_err(|e| format!("Could not receive Microsoft's sign-in response: {e}"))?;
+        listener.set_nonblocking(true)
+            .map_err(|e| format!("Could not configure the Microsoft sign-in callback: {e}"))?;
+        let deadline = Instant::now() + Duration::from_secs(180);
+        let (stream, _) = loop {
+            match listener.accept() {
+                Ok(connection) => break connection,
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        return Err("Microsoft sign-in timed out. Start sign-in again and finish it in your browser.".into());
+                    }
+                    std::thread::sleep(Duration::from_millis(200));
+                }
+                Err(error) => return Err(format!("Could not receive Microsoft's sign-in response: {error}")),
+            }
+        };
         let mut reader = BufReader::new(stream);
         let mut first_line = String::new();
         reader.read_line(&mut first_line)
@@ -504,13 +518,23 @@ async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
     let mut headers = HeaderMap::new();
     headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-    let response = reqwest::Client::new()
-        .get(format!("{CURSEFORGE_API}/mods/{mod_id}/files"))
-        .headers(headers).query(&[("pageSize","50"),("index","0")])
-        .send().await.map_err(|e| format!("Could not reach CurseForge: {e}"))?
-        .error_for_status().map_err(|e| format!("CurseForge could not list modpack versions: {e}"))?
-        .json::<Value>().await.map_err(|e| format!("CurseForge returned an unreadable version list: {e}"))?;
-    Ok(response["data"].as_array().cloned().unwrap_or_default().into())
+    let client = reqwest::Client::new();
+    let mut all_files = Vec::new();
+    // CurseForge paginates file history. Fetch every page in bounded batches so
+    // older releases are available in NOVA's version picker as well.
+    for page in 0..20u32 {
+        let response = client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files"))
+            .headers(headers.clone())
+            .query(&[("pageSize","50"),("index",&(page * 50).to_string())])
+            .send().await.map_err(|e| format!("Could not reach CurseForge: {e}"))?
+            .error_for_status().map_err(|e| format!("CurseForge could not list modpack versions: {e}"))?
+            .json::<Value>().await.map_err(|e| format!("CurseForge returned an unreadable version list: {e}"))?;
+        let files = response["data"].as_array().ok_or("CurseForge returned an invalid modpack version list.")?;
+        let count = files.len();
+        all_files.extend(files.iter().cloned());
+        if count < 50 { break; }
+    }
+    Ok(Value::Array(all_files))
 }
 
 #[tauri::command]
@@ -590,6 +614,9 @@ fn create_instance(instance_name: String, display_name: String, version: String,
         return Err(format!("Unsupported mod loader '{loader}'."));
     }
     let folder = instance_folder(&name)?;
+    if folder.exists() {
+        return Err("An instance with that name already exists. Choose a different name so existing game files are not overwritten.".into());
+    }
     std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
     let loader_version = if loader == "vanilla" { String::new() } else { "latest".to_owned() };
     let metadata = json!({
