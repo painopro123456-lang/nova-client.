@@ -1,0 +1,73 @@
+name: Sync dependency lockfiles
+
+on:
+  push:
+    branches:
+      - "**"
+    paths:
+      - "package.json"
+      - "src-tauri/Cargo.toml"
+      - "nova-mod/build.gradle"
+      - "nova-mod/gradle.properties"
+      - "nova-mod/settings.gradle"
+      - ".github/workflows/lockfile-sync.yml"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: lockfiles-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lock:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - name: Check out triggering commit
+        uses: actions/checkout@v4
+        with:
+          token: ${{ github.token }}
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+
+      - name: Generate npm lockfile
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Generate Cargo lockfile
+        run: cargo generate-lockfile --manifest-path src-tauri/Cargo.toml
+
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "9.8.0"
+
+      - name: Resolve and lock Fabric dependencies
+        working-directory: nova-mod
+        run: gradle build --write-locks
+
+      - name: Commit lockfiles
+        shell: bash
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add package-lock.json src-tauri/Cargo.lock nova-mod/gradle.lockfile
+          if git diff --cached --quiet; then
+            echo "Dependency lockfiles are already current."
+            exit 0
+          fi
+          git commit -m "Add reproducible dependency lockfiles"
+          git remote set-url origin "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+          git push origin "HEAD:${{ github.ref_name }}"

@@ -16,3 +16,8 @@ loom {
 }
 java { toolchain.languageVersion = JavaLanguageVersion.of(25); withSourcesJar() }
 tasks.withType(JavaCompile).configureEach { options.release = 25 }
+
+// Keep the Fabric build reproducible across CI and local machines.
+dependencyLocking {
+    lockAllConfigurations()
+}
