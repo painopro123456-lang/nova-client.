@@ -78,6 +78,7 @@ public final class NovaMenuScreen extends Screen {
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor g,int mx,int my,float delta) {
+        super.extractRenderState(g,mx,my,delta);
         g.fill(0,0,width,height,0xB9000000);
         int pw=Math.min(760,width-40), ph=Math.min(480,height-40), l=(width-pw)/2, t=(height-ph)/2;
         g.fill(l,t,l+pw,t+ph,PANEL);
@@ -119,7 +120,6 @@ public final class NovaMenuScreen extends Screen {
             g.text(font,"Background: "+(hasBackground(settingsModule)?"ON":"OFF")+"  ·  CLICK TO CHANGE",cx+12,sy+27,MUTED,false);
         }
         g.text(font,"NOVA IN-GAME  -  EARLY DEVELOPMENT",l+26,t+ph-24,MUTED,false);
-        super.extractRenderState(g,mx,my,delta);
     }
 
     @Override
