@@ -4,10 +4,6 @@ on:
     paths:
       - "nova-mod/**"
       - ".github/workflows/nova-mod-build.yml"
-  pull_request:
-    paths:
-      - "nova-mod/**"
-      - ".github/workflows/nova-mod-build.yml"
   workflow_dispatch:
 
 jobs:
@@ -24,7 +20,7 @@ jobs:
           java-version: "25"
       - uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: "9.5.1"
+          gradle-version: "9.8.0"
       - name: Build Fabric mod
         run: gradle build
       - name: Upload mod jar

@@ -3,10 +3,11 @@ name: Windows build
 on:
   workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'fix/**']
     paths:
       - "src/**"
       - "src-tauri/**"
+      - "nova-mod/**"
       - "package.json"
       - "index.html"
       - "vite.config.js"
@@ -20,10 +21,15 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - name: Clone source to a Windows-safe path
+      - name: Fetch the exact triggering commit to a Windows-safe path
         shell: pwsh
         working-directory: D:/a
-        run: git clone --depth 1 https://github.com/painopro123456-lang/nova-client..git nova-src
+        run: |
+          git init nova-src
+          Set-Location nova-src
+          git remote add origin https://github.com/painopro123456-lang/nova-client..git
+          git fetch --depth 1 origin "${{ github.sha }}"
+          git checkout --detach FETCH_HEAD
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -82,6 +88,12 @@ jobs:
       - name: Verify frontend production build
         working-directory: D:/a/nova-src
         run: npm run build
+
+      - name: Run Rust unit tests
+        working-directory: D:/a/nova-src
+        env:
+          CARGO_TERM_COLOR: always
+        run: cargo test --manifest-path src-tauri/Cargo.toml
 
       - name: Build NOVA Windows installer (verbose)
         working-directory: D:/a/nova-src

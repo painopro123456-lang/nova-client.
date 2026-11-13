@@ -18,10 +18,15 @@ const navGroups = [
 ];
 
 
-function Sidebar({ page, setPage }) {
+function readStored(key, fallback, validate) {
+  try { const value=JSON.parse(localStorage.getItem(key) ?? JSON.stringify(fallback)); return validate(value)?value:fallback; }
+  catch { return fallback; }
+}
+function writeStored(key,value) { try { localStorage.setItem(key,JSON.stringify(value)); } catch { /* Storage may be unavailable or full. */ } }
+function Sidebar({ page, setPage, signedIn, accountName, onSignOut }) {
   return <aside className="sidebar">
     <div className="brand"><div className="brand-mark"><Moon size={19}/></div><div><b>NOVA</b><span>CLIENT</span></div><span className="build-tag">BETA</span></div>
-    <div className="profile-card"><div className="avatar">N</div><div className="profile-copy"><b>Guest profile</b><span>Sign in to continue</span></div><ChevronDown size={15}/></div>
+    <div className="profile-card"><div className="avatar">{signedIn?(accountName||"N").slice(0,1).toUpperCase():"N"}</div><div className="profile-copy"><b>{signedIn?accountName||"Microsoft account":"Guest profile"}</b><span>{signedIn?"Microsoft account connected":"Sign in to continue"}</span></div>{signedIn&&<button className="text-button" onClick={onSignOut}>Sign out</button>}</div>
     <nav>{navGroups.map(group => <section className="nav-group" key={group.label}><div className="nav-label">{group.label}</div>{group.items.map(item => <button key={item.id} className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => setPage(item.id)}><item.icon size={17}/><span>{item.label}</span>{item.id === "pvp" && <span className="nav-dot"/>}</button>)}</section>)}</nav>
     <div className="sidebar-bottom"><div className="status-line"><span className="status-pulse"/><span>Launcher UI preview</span></div><button className="help-link" onClick={() => setPage("settings")}><CircleHelp size={16}/> Help & support</button><div className="sidebar-foot">NOVA CLIENT <span>0.1.0</span></div></div>
   </aside>;
@@ -43,7 +48,7 @@ function Topbar({ title, subtitle }) {
   </header>;
 }
 
-function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versionsLoading, loaderType, setLoaderType, launching, onLaunch, onLogin, signedIn, accountName, loginBusy, loginUrl, message }) {
+function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versionsLoading, loaderType, setLoaderType, memoryMax, launching, onLaunch, onLogin, signedIn, accountName, loginBusy, loginUrl, message }) {
   return <>
     <div className="hero-panel">
       <div className="hero-glow"/>
@@ -58,46 +63,69 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versi
 }
 
 
-function Catalog({ packs }) {
+function Catalog({ packs, memoryMax, onNavigate }) {
   const [q,setQ]=useState("");
   const [provider,setProvider]=useState("modrinth");
   const [hits,setHits]=useState([]);
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [page,setPage]=useState(0);
-  const [installed,setInstalled]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.installedPacks")||"{}")}catch{return{}}});
+  const [hasNext,setHasNext]=useState(false);
+  const [installed,setInstalled]=useState(()=>readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v)));
+  const [instances,setInstances]=useState(()=>readStored("nova.instances",[],Array.isArray));
+  const [targetInstance,setTargetInstance]=useState(()=>{const custom=readStored("nova.instances",[],Array.isArray);const packs=readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v));return custom[0]?.instanceName||Object.values(packs)[0]?.instanceName||"";});
+  const [modInstallBusy,setModInstallBusy]=useState("");
+  const [modInstallMessage,setModInstallMessage]=useState("");
   const [installingId,setInstallingId]=useState("");
   const [packActionMessage,setPackActionMessage]=useState("");
   const [versionProject,setVersionProject]=useState(null);
   const [packVersions,setPackVersions]=useState([]);
   const [packVersionsBusy,setPackVersionsBusy]=useState(false);
   const [selectedPackVersion,setSelectedPackVersion]=useState("");
-  const [installDialog,setInstallDialog]=useState(null);
+  const [installDialog,setInstallDialog]=useState(()=>readStored("nova.activeInstall",null,v=>v===null||(v&&typeof v==="object")));
 
   useEffect(()=>{
     const ctrl=new AbortController();
+    setBusy(true); setError(""); setHits([]); setHasNext(false);
     const timer=setTimeout(async()=>{
-      setBusy(true); setError("");
       try {
         let results=[];
+        let canContinue=false;
         if(provider==="modrinth") {
           const p=new URLSearchParams({query:q,facets:JSON.stringify([[packs?"project_type:modpack":"project_type:mod"]]),limit:"24",offset:String(page*24)});
           const r=await fetch("https://api.modrinth.com/v2/search?"+p,{signal:ctrl.signal});
           if(!r.ok) throw new Error("Modrinth catalog request failed");
           const data=await r.json();
           results=(data.hits||[]).map(x=>({id:x.project_id,title:x.title,description:x.description,downloads:x.downloads,image:x.icon_url,url:"https://modrinth.com/"+(packs?"modpack/":"mod/")+x.slug}));
+          canContinue=(page+1)*24 < Number(data.total_hits||0);
         } else {
           const data=await invoke("curseforge_search",{query:q,packs,index:page*24,gameVersion:null});
           results=(data.data||[]).map(x=>({id:String(x.id),title:x.name,description:x.summary||"No description provided.",downloads:x.downloadCount,image:x.logo?.thumbnailUrl,url:x.links?.websiteUrl||"https://www.curseforge.com/minecraft/"+(packs?"modpacks":"mc-mods")+"/"+x.slug}));
+          canContinue=(page+1)*24 < Number(data.pagination?.totalCount||0);
         }
-        if(!ctrl.signal.aborted) setHits(results);
+        if(!ctrl.signal.aborted) { setHits(results); setHasNext(canContinue); }
       } catch(e) { if(!ctrl.signal.aborted) setError(typeof e==="string"?e:(e.message||"Unable to load catalog. Check your connection and retry.")); }
       finally { if(!ctrl.signal.aborted) setBusy(false); }
     },250);
     return ()=>{clearTimeout(timer);ctrl.abort();};
   },[q,packs,provider,page]);
 
-  useEffect(()=>{localStorage.setItem("nova.installedPacks",JSON.stringify(installed));},[installed]);
+  useEffect(()=>{writeStored("nova.installedPacks",installed);},[installed]);
+  useEffect(()=>{
+    const refresh=()=>{const next=readStored("nova.instances",[],Array.isArray);const packs=readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v));setInstances(next);setTargetInstance(current=>(next.some(item=>item.instanceName===current)||Object.values(packs).some(item=>item.instanceName===current))?current:(next[0]?.instanceName||Object.values(packs)[0]?.instanceName||""));};
+    window.addEventListener("nova-instances-recovered",refresh);
+    return()=>window.removeEventListener("nova-instances-recovered",refresh);
+  },[]);
+  const availableInstances=[...instances,...Object.values(installed)].filter((item,index,list)=>item?.instanceName&&list.findIndex(other=>other?.instanceName===item.instanceName)===index);
+  const installMod=async(project)=>{
+    if(!targetInstance){setModInstallMessage("Create an instance first, then select it here.");return;}
+    setModInstallBusy(String(project.id));setModInstallMessage("Installing "+project.title+"…");
+    try{
+      const result=await invoke("install_mod_file",{provider,projectId:String(project.id),instanceName:targetInstance});
+      setModInstallMessage((result.fileName||project.title)+" installed in "+targetInstance+".");
+    }catch(error){setModInstallMessage(typeof error==="string"?error:(error.message||"Could not install this mod."));}
+    finally{setModInstallBusy("");}
+  };
   useEffect(()=>{
     let alive=true;
     let unlisten;
@@ -140,14 +168,17 @@ function Catalog({ packs }) {
     const instanceName=(project.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,24)||"modpack")+"-"+Date.now().toString(36)+"-"+uniqueSuffix;
     setInstallingId(projectId);
     setVersionProject(null);
-    setInstallDialog({name:project.title,step:0,progress:null,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""});
+    const initialProgress={name:project.title,instanceName,step:0,progress:null,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""};
+    setInstallDialog(initialProgress); writeStored("nova.activeInstall",initialProgress);
     try{
-      setInstallDialog({name:project.title,step:0,progress:null,status:"Downloading modpack",detail:"Getting the selected release and its manifest…",done:false,error:""});
+      const downloadProgress={name:project.title,instanceName,step:0,progress:null,status:"Downloading modpack",detail:"Getting the selected release and its manifest…",done:false,error:""};
+      setInstallDialog(downloadProgress); writeStored("nova.activeInstall",downloadProgress);
       const metadata=provider==="modrinth"
         ? await invoke("install_modrinth_modpack",{projectId,instanceName,versionId:selectedPackVersion})
         : await invoke("install_curseforge_modpack",{modId:projectId,instanceName,fileId:Number(selectedPackVersion)});
-      setInstallDialog({name:metadata.name||project.title,step:1,progress:null,status:"Preparing Minecraft",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""});
-      await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName});
+      const preparingProgress={name:metadata.name||project.title,instanceName,step:1,progress:null,status:"Preparing Minecraft",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""};
+      setInstallDialog(preparingProgress); writeStored("nova.activeInstall",preparingProgress);
+      await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName,memoryMax});
       // Only expose a pack as installed after Minecraft and its loader are ready.
       // Remove the previous isolated install only after the replacement is ready.
       const previous=installed[storageKey];
@@ -155,19 +186,20 @@ function Catalog({ packs }) {
         try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new working install even if stale cleanup fails. */}
       }
       setInstalled(old=>({...old,[storageKey]:metadata}));
-      setInstallDialog({name:metadata.name||project.title,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""});
+      const completeProgress={name:metadata.name||project.title,instanceName,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""};
+      setInstallDialog(completeProgress); writeStored("nova.activeInstall",completeProgress);
       setPackActionMessage((metadata.name||project.title)+" is fully installed and ready to play.");
     }catch(e){
       const reason=typeof e==="string"?e:(e.message||"Modpack installation failed.");
       try{await invoke("delete_instance",{instanceName});}catch{/* Ignore cleanup errors; show the original installation failure. */}
-      setInstallDialog(current=>({...current,done:true,error:reason,status:"Installation failed",detail:"The incomplete instance was cleaned up where possible. You can safely retry."}));
+      setInstallDialog(current=>{const failed={...current,done:true,error:reason,status:"Installation failed",detail:"The incomplete instance was cleaned up where possible. You can safely retry."};writeStored("nova.activeInstall",failed);return failed;});
       setPackActionMessage((project.title)+" installation failed: "+reason);
     }finally{setInstallingId("");}
   };
   const launchPack=async metadata=>{
     setInstallingId(String(metadata.projectId));setPackActionMessage(`Preparing ${metadata.name}…`);
     try{
-      await invoke("launch_minecraft",{version:metadata.minecraftVersion,loader:metadata.loader,loaderBuild:metadata.loaderVersion,instanceName:metadata.instanceName});
+      await invoke("launch_minecraft",{version:metadata.minecraftVersion,loader:metadata.loader,loaderBuild:metadata.loaderVersion,instanceName:metadata.instanceName,memoryMax});
       setPackActionMessage(`${metadata.name} has been started.`);
     }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Could not launch this modpack."));}
     finally{setInstallingId("");}
@@ -191,21 +223,24 @@ function Catalog({ packs }) {
       </div>
     </div>
     <div className="catalog-search-row">
+      {!packs&&<div className="catalog-source-pill"><span>INSTALL INTO</span><select value={targetInstance} onChange={e=>setTargetInstance(e.target.value)} disabled={!availableInstances.length}><option value="">{availableInstances.length?"Choose instance":"No instances"}</option>{availableInstances.map(instance=><option key={instance.instanceName} value={instance.instanceName}>{instance.name||instance.instanceName}</option>)}</select>{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
       <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks, themes, adventures…":"Search mods, performance, shaders, utilities…"}/>{q&&<button className="clear-search" onClick={()=>setQ("")} aria-label="Clear search"><X size={14}/></button>}</div>
       <div className="catalog-source-pill"><span className="source-dot"/> {provider==="modrinth"?"MODRINTH INDEX":"CURSEFORGE API"}</div>
     </div>
     {busy&&<div className="catalog-state"><div className="loading-orbit"/><b>Finding great projects</b><span>Searching {provider==="modrinth"?"Modrinth":"CurseForge"}…</span></div>}
     {error&&<div className="catalog-note error"><CircleHelp size={16}/><span>{error}</span></div>}
     {packActionMessage&&packs&&<div className="catalog-note"><span>{packActionMessage}</span></div>}
+    {modInstallMessage&&!packs&&<div className="catalog-note"><span>{modInstallMessage}</span>{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
     {!busy&&!error&&hits.length===0&&<div className="catalog-state"><div className="empty-library"><Blocks size={25}/></div><b>No projects found</b><span>Try another search or switch catalog source.</span></div>}
     {!busy&&hits.length>0&&<div className="catalog-results-label"><span>{hits.length} PROJECTS ON THIS PAGE</span><span>PAGE {String(page+1).padStart(2,"0")}</span></div>}
     <div className="catalog-grid">{hits.map((x,i)=><article className="catalog-card" key={x.id}>
       <div className="project-card-top">{x.image?<img src={x.image} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<span className="project-source">{provider==="modrinth"?"MODRINTH":"CURSEFORGE"}</span><span className="project-rank">{String(page*24+i+1).padStart(2,"0")}</span></div>
       <h3>{x.title}</h3><p>{x.description}</p>
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
-      {packs&&<div className="pack-install-row">{installed[provider+":"+String(x.id)]
+      {packs?<div className="pack-install-row">{installed[provider+":"+String(x.id)]
         ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Install & Play"}</button>
-        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
+        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>
+      : <div className="pack-install-row"><button className="primary-btn" onClick={()=>installMod(x)} disabled={!targetInstance||Boolean(modInstallBusy)}><ArrowDownToLine size={14}/>{modInstallBusy===String(x.id)?"Installing…":"Install mod"}</button></div>}
     </article>)}</div>}
     {installDialog&&<div className="pack-version-backdrop install-progress-backdrop" role="presentation">
       <section className="pack-version-dialog install-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="install-progress-title">
@@ -222,7 +257,8 @@ function Catalog({ packs }) {
           <div className={installDialog.step>=2?"complete":""}><span>3</span><label>Ready to play</label></div>
         </div>
         {installDialog.error&&<div className="install-progress-error">{installDialog.error}</div>}
-        {installDialog.done&&<div className="pack-version-actions"><button className="primary-btn" onClick={()=>setInstallDialog(null)}>Close</button></div>}
+        {!installDialog.done&&installDialog.step===0&&<div className="pack-version-actions"><button className="secondary-btn" onClick={async()=>{try{await invoke("cancel_modpack_install",{instanceName:installDialog.instanceName});setInstallDialog(current=>({...current,status:"Cancelling installation",detail:"Stopping the current download safely…"}));}catch(error){setInstallDialog(current=>({...current,detail:typeof error==="string"?error:(error.message||"Could not cancel this installation.")}));}}}>Cancel installation</button></div>}
+        {installDialog.done&&<div className="pack-version-actions"><button className="primary-btn" onClick={()=>{setInstallDialog(null);writeStored("nova.activeInstall",null);}}>Close</button></div>}
       </section>
     </div>}
     {versionProject&&<div className="pack-version-backdrop" role="presentation" onClick={()=>!packVersionsBusy&&setVersionProject(null)}>
@@ -232,26 +268,56 @@ function Catalog({ packs }) {
           : <><label className="pack-version-label" htmlFor="pack-version-select">MODPACK VERSION</label><select id="pack-version-select" className="pack-version-select" value={selectedPackVersion} onChange={e=>setSelectedPackVersion(e.target.value)}>{packVersions.map(v=><option key={v.id} value={v.id}>{v.label}</option>)}</select><div className="pack-version-meta">{packVersions.find(v=>v.id===selectedPackVersion)?.published ? "Published "+new Date(packVersions.find(v=>v.id===selectedPackVersion).published).toLocaleDateString() : "Latest versions are listed first"}</div><div className="pack-version-actions"><button className="secondary-btn" onClick={()=>setVersionProject(null)}>Cancel</button><button className="primary-btn" onClick={installPack} disabled={!selectedPackVersion}><ArrowDownToLine size={14}/> Install selected version</button></div></>}
       </section>
     </div>}
-    <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||hits.length===0} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
+    <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||!hasNext} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
   </section>;
 }
-function LocalInstances({ versions }) {
-  const [items,setItems]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.instances")||"[]")}catch{return[]}});
-  const [packs,setPacks]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.installedPacks")||"{}")}catch{return{}}});
+function LocalInstances({ versions, memoryMax }) {
+  const [items,setItems]=useState(()=>readStored("nova.instances",[],Array.isArray));
+  const [packs,setPacks]=useState(()=>readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v)));
   const [name,setName]=useState("");
   const [version,setVersion]=useState("");
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
   useEffect(()=>{if(!version && versions.length) setVersion(versions.find(v=>v.type==="release")?.id || versions[0].id);},[versions,version]);
-  useEffect(()=>{localStorage.setItem("nova.instances",JSON.stringify(items))},[items]);
+  useEffect(()=>{writeStored("nova.instances",items)},[items]);
+  useEffect(()=>{const recover=()=>{setItems(readStored("nova.instances",[],Array.isArray));setPacks(readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v)));};window.addEventListener("nova-instances-recovered",recover);return()=>window.removeEventListener("nova-instances-recovered",recover);},[]);
   const add=async()=>{if(!name.trim()||!version)return;const instanceName=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);setAction("Creating instance "+name.trim()+"…");try{const metadata=await invoke("create_instance",{instanceName,displayName:name.trim(),version,loader});setItems(a=>[...a,{id:Date.now(),...metadata}]);setName("");setAction((metadata.name||name.trim())+" created. Press Install & Play to install Minecraft and its loader.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not create this instance."));}};
-  const playPack=async pack=>{setAction("Installing Minecraft and loader for "+pack.name+" (if needed), then launching…");try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName});setAction(pack.name+" started.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}};
-  const removePack=async(id,pack)=>{setAction("Deleting "+pack.name+"…");try{await invoke("delete_instance",{instanceName:pack.instanceName});setItems(old=>old.filter(x=>x.id!==id));setPacks(old=>{const next={...old};delete next[id];localStorage.setItem("nova.installedPacks",JSON.stringify(next));return next;});setAction(pack.name+" deleted.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not delete this instance."));}};
+  const playPack=async pack=>{setAction("Installing Minecraft and loader for "+pack.name+" (if needed), then launching…");try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName,memoryMax});setAction(pack.name+" started.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}};
+  const removePack=async(id,pack)=>{setAction("Deleting "+pack.name+"…");try{await invoke("delete_instance",{instanceName:pack.instanceName});setItems(old=>old.filter(x=>x.id!==id));setPacks(old=>{const next={...old};delete next[id];writeStored("nova.installedPacks",next);return next;});setAction(pack.name+" deleted.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not delete this instance."));}};
   const installedPacks=Object.entries(packs);
   return <section className="local-instances"><div className="eyebrow">LOCAL PROFILES</div><h2>Your instances</h2><p>Each modpack gets its own isolated folder. NOVA installs the pack files, Minecraft, Java and the matching loader before marking the instance ready.</p>
     {installedPacks.length>0&&<><div className="section-heading"><div><div className="eyebrow">INSTALLED MODPACKS</div><h2>Your library</h2></div></div>{installedPacks.map(([id,pack])=><div className="instance-entry" key={id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{pack.name}</b><span>Minecraft {pack.minecraftVersion} · {pack.loader}{pack.loaderVersion?" "+pack.loaderVersion:""} · {pack.source}</span></div><button className="primary-btn" onClick={()=>playPack(pack)}><Play size={13} fill="currentColor"/> Play</button><button className="delete-entry" onClick={()=>removePack(id,pack)}>Delete</button></div>)}</>}
     <div className="section-heading"><div><div className="eyebrow">CUSTOM PROFILES</div><h2>Organize versions</h2></div></div><div className="instance-create"><input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Instance name"/><select value={version} onChange={e=>setVersion(e.target.value)} disabled={!version||versions.length===0}>{versions.map(v=><option key={v.id} value={v.id}>{v.id}{v.type==="snapshot"?" · Snapshot":""}</option>)}</select><select value={loader} onChange={e=>setLoader(e.target.value)}><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="quilt">Quilt</option><option value="vanilla">Vanilla</option></select><button className="primary-btn" onClick={add} disabled={!name.trim()||!version}><Plus size={14}/> Create instance</button></div>{items.length===0?<div className="catalog-note">No custom profiles yet.</div>:items.map(x=><div className="instance-entry" key={x.id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{x.name}</b><span>Minecraft {x.minecraftVersion||x.version} · {x.loader||"vanilla"} · isolated instance</span></div><button className="primary-btn" onClick={()=>playPack(x)}>Install & Play</button><button className="delete-entry" onClick={()=>removePack(x.id,x)}>Delete</button></div>)}
     {action&&<div className="catalog-note">{action}</div>}
+  </section>;
+}
+
+function PvpPage({onNavigate}) {
+  const modules=[
+    ["FPS","Live frame-rate counter."],
+    ["Keystrokes","WASD and jump key display."],
+    ["Armor Status","Remaining durability for equipped armor."],
+    ["Clock","Compact in-game clock."]
+  ];
+  return <section className="local-instances">
+    <div className="eyebrow">NOVA FABRIC CLIENT</div><h2>PvP HUD toolkit</h2>
+    <p>These modules are implemented in the NOVA in-game menu. Install the NOVA Fabric 26.2 mod, enter a world, then press Right Shift to open the menu and enable the modules you want.</p>
+    <div className="instance-list">{modules.map(([name,description])=><div className="instance-card" key={name}><div><b>{name}</b><span>{description}</span></div><span className="instance-version">READY</span></div>)}</div>
+    <button className="primary-btn" onClick={()=>onNavigate("mods")}>Browse more mods</button>
+  </section>;
+}
+
+function SettingsPage({memoryMax,setMemoryMax}) {
+  return <section className="local-instances">
+    <div className="eyebrow">NOVA PREFERENCES</div><h2>Performance settings</h2>
+    <p>Choose the maximum memory available to Minecraft. Start with 4 GB; increase it only when your PC has enough free memory.</p>
+    <div className="instance-create">
+      <label htmlFor="nova-memory">GAME MEMORY</label>
+      <select id="nova-memory" value={memoryMax} onChange={e=>setMemoryMax(e.target.value)}>
+        {["2G","3G","4G","6G","8G","12G","16G"].map(v=><option key={v} value={v}>{v.replace("G"," GB")}</option>)}
+      </select>
+    </div>
+    <div className="catalog-note">The selected limit is applied to new launches and modpack preparation. It does not reserve memory while Minecraft is closed.</div>
   </section>;
 }
 
@@ -273,14 +339,20 @@ export default function App() {
   const [versions, setVersions] = useState([]);
   const [versionsLoading, setVersionsLoading] = useState(true);
   const [loaderType, setLoaderType] = useState("vanilla");
+  const [memoryMax,setMemoryMax]=useState(()=>readStored("nova.memoryMax","4G",v=>["2G","3G","4G","6G","8G","12G","16G"].includes(v)));
+  useEffect(()=>{writeStored("nova.memoryMax",memoryMax);},[memoryMax]);
   const [launching, setLaunching] = useState(false);
   const [signedIn, setSignedIn] = useState(false);
   const [accountName, setAccountName] = useState("");
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginUrl, setLoginUrl] = useState("");
   const [message, setMessage] = useState("");
+  const [gameExit,setGameExit]=useState("");
   useEffect(() => {
     let alive = true;
+    const previousInstall=readStored("nova.activeInstall",null,v=>v&&typeof v==="object");
+    if(previousInstall&&!previousInstall.done)writeStored("nova.activeInstall",{...previousInstall,done:true,error:"The launcher closed before this installation finished.",status:"Installation interrupted",detail:"NOVA will remove abandoned temporary files after they become stale. You can safely retry."});
+    invoke("list_instances").then(entries=>{if(!alive||!Array.isArray(entries))return;const custom=entries.filter(x=>x&&x.source==="custom").map(x=>({...x,id:x.instanceName||x.name||Date.now()}));const recoveredPacks={};for(const pack of entries.filter(x=>x&&x.source&&x.source!=="custom"&&x.projectId&&x.instanceName))recoveredPacks[String(pack.source)+":"+String(pack.projectId)]=pack;writeStored("nova.instances",custom);writeStored("nova.installedPacks",recoveredPacks);window.dispatchEvent(new Event("nova-instances-recovered"));}).catch(()=>{});
     invoke("minecraft_versions").then(manifest => {
       const entries = Array.isArray(manifest?.versions) ? manifest.versions.filter(v => typeof v.id === "string" && v.id.trim()).map(v => ({id:v.id,type:v.type || "release"})) : [];
       if (!entries.length) throw new Error("Minecraft returned an empty version list.");
@@ -289,16 +361,22 @@ export default function App() {
       .finally(() => { if (alive) setVersionsLoading(false); });
     let offLink;
     let offComplete;
+    let offGameExit;
+    let offPackProgress;
     (async () => {
       offLink = await listen("nova-login-link", event => { if (alive) { setLoginUrl(event.payload); setMessage("Microsoft sign-in opened in your browser. Complete the sign-in there. If it did not open, use the link below."); } });
       offComplete = await listen("nova-login-complete", event => { if (alive) { setSignedIn(true); setAccountName(event.payload); setLoginUrl(""); setMessage("Microsoft account connected."); } });
+      offGameExit=await listen("nova-game-exit",event=>{if(alive){const code=event.payload?.exitCode;setGameExit(code===0?"Minecraft closed normally.":"Minecraft exited with code "+(code??"unknown")+". Check the game log for details.");}});
+      offPackProgress=await listen("nova-pack-progress",event=>{if(!alive)return;const progress=event.payload||{};const saved=readStored("nova.activeInstall",null,v=>v&&typeof v==="object");if(saved)writeStored("nova.activeInstall",{...saved,progress:typeof progress.percent==="number"?progress.percent:null,status:progress.phase==="preparing"?"Preparing Minecraft":progress.phase==="archive"?"Downloading modpack archive":"Downloading modpack files",detail:progress.detail||saved.detail});});
+      if(!alive){offLink?.();offComplete?.();offGameExit?.();offPackProgress?.();return;}
       try {
         const name = await invoke("minecraft_account_name");
         if (alive && name) { setSignedIn(true); setAccountName(name); }
       } catch (error) { if (alive) setMessage(String(error)); }
     })();
-    return () => { alive = false; offLink?.(); offComplete?.(); };
+    return () => { alive = false; offLink?.(); offComplete?.(); offGameExit?.(); offPackProgress?.(); };
   }, []);
+  const handleSignOut=async()=>{try{await invoke("sign_out_minecraft");setSignedIn(false);setAccountName("");setLoginUrl("");setMessage("Signed out of your Microsoft account.");}catch(error){setMessage(typeof error==="string"?error:(error.message||"Could not sign out."));}};
   const handleLogin = async () => {
     setLoginBusy(true); setLoginUrl(""); setMessage("Requesting a Microsoft sign-in session…");
     try { const name = await invoke("begin_microsoft_login"); setSignedIn(true); setAccountName(name); setLoginUrl(""); setMessage(`Signed in as ${name}.`); }
@@ -310,11 +388,11 @@ export default function App() {
     if (typeof selectedVersion !== "string" || !selectedVersion.trim() || selectedVersion === "null" || selectedVersion === "undefined") { setMessage("No Minecraft version is selected. Wait for the version list, then choose a version."); return; }
     if (versionsLoading) { setMessage("Minecraft versions are still loading. Try again in a moment."); return; }
     setLaunching(true); setMessage(`Preparing Minecraft ${selectedVersion} (${loaderType}). The first launch downloads game files and Java runtime.`);
-    try { await invoke("launch_minecraft", { version: selectedVersion, loader: loaderType }); setMessage("Minecraft has been started. Keep NOVA open while the game loads."); }
+    try { await invoke("launch_minecraft", { version: selectedVersion, loader: loaderType, memoryMax }); setMessage("Minecraft has been started. Keep NOVA open while the game loads."); }
     catch (error) { setMessage(typeof error === "string" ? error : (error.message || "Minecraft could not be started.")); }
     finally { setLaunching(false); }
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances versions={versions}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/>{gameExit&&<div className="catalog-note" role="status">{gameExit}<button className="text-button" onClick={()=>setGameExit("")}>Dismiss</button></div>}<div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} memoryMax={memoryMax} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false} memoryMax={memoryMax} onNavigate={setPage}/> : page === "modpacks" ? <Catalog packs={true} memoryMax={memoryMax} onNavigate={setPage}/> : page === "instances" ? <LocalInstances versions={versions} memoryMax={memoryMax}/> : page === "settings" ? <SettingsPage memoryMax={memoryMax} setMemoryMax={setMemoryMax}/> : page === "pvp" ? <PvpPage onNavigate={setPage}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
