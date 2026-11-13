@@ -65,17 +65,39 @@ fn get_game_logs(instance_name: Option<String>) -> Result<Value, String> {
     let local_app_data = std::env::var("LOCALAPPDATA")
         .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
     let root = PathBuf::from(local_app_data).join("NOVA Client").join("minecraft");
-    let game_dir = if let Some(name) = instance_name.as_deref() {
-        root.join("instances").join(safe_instance_name(name)?)
+    let mut minecraft_sections = Vec::new();
+    let mut minecraft_paths = Vec::new();
+    if let Some(name) = instance_name.as_deref() {
+        let game_dir = root.join("instances").join(safe_instance_name(name)?);
+        let path = game_dir.join("logs").join("latest.log");
+        minecraft_sections.push(format!("=== {} ===\\n{}", name, tail_file(&path, 500)));
+        minecraft_paths.push(path.display().to_string());
     } else {
-        root
-    };
-    let minecraft_log_path = game_dir.join("logs").join("latest.log");
+        let default_log = root.join("logs").join("latest.log");
+        if default_log.exists() {
+            minecraft_sections.push(format!("=== Default Minecraft ===\\n{}", tail_file(&default_log, 350)));
+            minecraft_paths.push(default_log.display().to_string());
+        }
+        let instances_dir = root.join("instances");
+        if let Ok(entries) = std::fs::read_dir(&instances_dir) {
+            for entry in entries.flatten().take(30) {
+                if !entry.file_type().is_ok_and(|kind| kind.is_dir()) { continue; }
+                let path = entry.path().join("logs").join("latest.log");
+                if path.is_file() {
+                    minecraft_sections.push(format!("=== Instance {} ===\\n{}", entry.file_name().to_string_lossy(), tail_file(&path, 350)));
+                    minecraft_paths.push(path.display().to_string());
+                }
+            }
+        }
+        if minecraft_sections.is_empty() {
+            minecraft_sections.push("No Minecraft latest.log files have been created yet. Launch a profile once to generate its game log.".into());
+        }
+    }
     Ok(json!({
         "launcherLog": tail_file(&game_log_path(), 300),
-        "minecraftLog": tail_file(&minecraft_log_path, 500),
+        "minecraftLog": minecraft_sections.join("\\n\\n"),
         "launcherLogPath": game_log_path().display().to_string(),
-        "minecraftLogPath": minecraft_log_path.display().to_string()
+        "minecraftLogPath": if minecraft_paths.is_empty() { "Minecraft logs\\\\latest.log".to_owned() } else { minecraft_paths.join(" | ") }
     }))
 }
 
