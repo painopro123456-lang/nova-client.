@@ -526,8 +526,9 @@ fn loader_from_id(id: &str) -> Result<(String, String), String> {
 
 fn save_instance_metadata(folder: &Path, metadata: Value) -> Result<Value, String> {
     std::fs::create_dir_all(folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
-    std::fs::write(folder.join("nova-instance.json"), serde_json::to_vec_pretty(&metadata)
-        .map_err(|e| format!("Could not prepare instance metadata: {e}"))?)
+    let serialized = serde_json::to_vec_pretty(&metadata)
+        .map_err(|e| format!("Could not prepare instance metadata: {e}"))?;
+    atomic_write(&folder.join("nova-instance.json"), &serialized)
         .map_err(|e| format!("Could not save instance metadata: {e}"))?;
     Ok(metadata)
 }
@@ -733,10 +734,16 @@ fn create_instance(instance_name: String, display_name: String, version: String,
         return Err(format!("Unsupported mod loader '{loader}'."));
     }
     let folder = instance_folder(&name)?;
-    if folder.exists() {
-        return Err("An instance with that name already exists. Choose a different name so existing game files are not overwritten.".into());
+    if let Some(parent) = folder.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| format!("Could not create instances folder: {e}"))?;
     }
-    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    match std::fs::create_dir(&folder) {
+        Ok(()) => {}
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err("An instance with that name already exists. Choose a different name so existing game files are not overwritten.".into());
+        }
+        Err(error) => return Err(format!("Could not create instance folder: {error}")),
+    }
     let loader_version = if loader == "vanilla" { String::new() } else { "latest".to_owned() };
     let metadata = json!({
         "instanceName": name,
