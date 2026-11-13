@@ -75,6 +75,7 @@ function Catalog({ packs, memoryMax, onNavigate }) {
   const [instances,setInstances]=useState(()=>readStored("nova.instances",[],Array.isArray));
   const [targetInstance,setTargetInstance]=useState(()=>{const custom=readStored("nova.instances",[],Array.isArray);const packs=readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v));return custom[0]?.instanceName||Object.values(packs)[0]?.instanceName||"";});
   const [modInstallBusy,setModInstallBusy]=useState("");
+  const [modInstallTarget,setModInstallTarget]=useState("");
   const [modInstallMessage,setModInstallMessage]=useState("");
   const [modInstallProgress,setModInstallProgress]=useState(null);
   const [installingId,setInstallingId]=useState("");
@@ -120,12 +121,12 @@ function Catalog({ packs, memoryMax, onNavigate }) {
   const availableInstances=[...instances,...Object.values(installed)].filter((item,index,list)=>item?.instanceName&&list.findIndex(other=>other?.instanceName===item.instanceName)===index);
   const installMod=async(project)=>{
     if(!targetInstance){setModInstallMessage("Create an instance first, then select it here.");return;}
-    setModInstallBusy(String(project.id));setModInstallMessage("Installing "+project.title+"…");setModInstallProgress({percent:0,detail:"Connecting to the mod provider…"});
+    setModInstallBusy(String(project.id));setModInstallTarget(targetInstance);setModInstallMessage("Installing "+project.title+"…");setModInstallProgress({percent:0,detail:"Connecting to the mod provider…"});
     try{
       const result=await invoke("install_mod_file",{provider,projectId:String(project.id),instanceName:targetInstance});
       setModInstallMessage((result.fileName||project.title)+" installed in "+targetInstance+".");
     }catch(error){setModInstallMessage(typeof error==="string"?error:(error.message||"Could not install this mod."));}
-    finally{setModInstallBusy("");setModInstallProgress(null);}
+    finally{setModInstallBusy("");setModInstallTarget("");setModInstallProgress(null);}
   };
   useEffect(()=>{
     let alive=true;
@@ -145,7 +146,7 @@ function Catalog({ packs, memoryMax, onNavigate }) {
 
   const cancelModInstall=async()=>{
     try{
-      await invoke("cancel_modpack_install",{instanceName:targetInstance});
+      await invoke("cancel_modpack_install",{instanceName:modInstallTarget});
       setModInstallMessage("Cancelling mod installation…");
     }catch(error){setModInstallMessage(typeof error==="string"?error:(error.message||"Could not cancel this installation."));}
   };
@@ -232,7 +233,7 @@ function Catalog({ packs, memoryMax, onNavigate }) {
       </div>
     </div>
     <div className="catalog-search-row">
-      {!packs&&<div className="catalog-source-pill"><span>INSTALL INTO</span><select value={targetInstance} onChange={e=>setTargetInstance(e.target.value)} disabled={!availableInstances.length}><option value="">{availableInstances.length?"Choose instance":"No instances"}</option>{availableInstances.map(instance=><option key={instance.instanceName} value={instance.instanceName}>{instance.name||instance.instanceName}</option>)}</select>{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
+      {!packs&&<div className="catalog-source-pill"><span>INSTALL INTO</span><select value={targetInstance} onChange={e=>setTargetInstance(e.target.value)} disabled={!availableInstances.length||!!modInstallBusy}><option value="">{availableInstances.length?"Choose instance":"No instances"}</option>{availableInstances.map(instance=><option key={instance.instanceName} value={instance.instanceName}>{instance.name||instance.instanceName}</option>)}</select>{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
       <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks, themes, adventures…":"Search mods, performance, shaders, utilities…"}/>{q&&<button className="clear-search" onClick={()=>setQ("")} aria-label="Clear search"><X size={14}/></button>}</div>
       <div className="catalog-source-pill"><span className="source-dot"/> {provider==="modrinth"?"MODRINTH INDEX":"CURSEFORGE API"}</div>
     </div>
