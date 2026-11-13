@@ -124,7 +124,7 @@ function Catalog({ packs }) {
     const storageKey=provider+":"+projectId;
     const uniqueSuffix=(typeof crypto!=="undefined"&&crypto.randomUUID)?crypto.randomUUID().slice(0,8):Math.random().toString(36).slice(2,10);
     const instanceName=(project.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,24)||"modpack")+"-"+Date.now().toString(36)+"-"+uniqueSuffix;
-    setInstallingId(key);
+    setInstallingId(projectId);
     setVersionProject(null);
     setInstallDialog({name:project.title,step:0,progress:8,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""});
     try{
