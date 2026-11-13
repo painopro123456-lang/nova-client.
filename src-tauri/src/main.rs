@@ -200,7 +200,28 @@ async fn check_for_updates() -> Result<Value, String> {
 
 async fn check_for_updates_inner() -> Result<Value, String> {
     let current = env!("CARGO_PKG_VERSION");
-    let release = latest_nova_release().await?;
+    // A 404 from /releases/latest means the repository has not published
+    // a GitHub Release yet. Treat that as "not published", not as an updater
+    // failure; real network/API errors must still be surfaced.
+    let client = http_client()?;
+    let response = client.get(NOVA_RELEASES_API)
+        .header("User-Agent", "NOVA-Client-Updater")
+        .header(ACCEPT, "application/vnd.github+json")
+        .send().await.map_err(|e| format!("Could not check NOVA updates: {e}"))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(json!({
+            "currentVersion": current,
+            "latestVersion": current,
+            "available": false,
+            "releasePublished": false,
+            "releaseNotes": "NOVA has not published a GitHub release yet. Automatic updates will be available after the first release is published.",
+            "publishedAt": "",
+            "downloadUrl": null
+        }));
+    }
+    let release: Value = response.error_for_status()
+        .map_err(|e| format!("GitHub could not provide the latest NOVA release: {e}"))?
+        .json().await.map_err(|e| format!("GitHub returned invalid update information: {e}"))?;
     let latest = release["tag_name"].as_str().ok_or("The latest NOVA release has no version tag.")?
         .trim_start_matches('v').to_owned();
     let available = version_is_newer(&latest, current);
@@ -209,6 +230,7 @@ async fn check_for_updates_inner() -> Result<Value, String> {
         "currentVersion": current,
         "latestVersion": latest,
         "available": available,
+        "releasePublished": true,
         "releaseNotes": release["body"].as_str().unwrap_or("No release notes were provided."),
         "publishedAt": release["published_at"].as_str().unwrap_or(""),
         "downloadUrl": download_url
