@@ -29,6 +29,13 @@ fn http_client() -> Result<reqwest::Client,String> {
     reqwest::Client::builder().connect_timeout(Duration::from_secs(15)).timeout(Duration::from_secs(180))
         .build().map_err(|e|format!("Could not configure the download client: {e}"))
 }
+fn normalize_memory(value: Option<String>) -> Result<String,String> {
+    let raw=value.unwrap_or_else(||"4G".to_owned()).trim().to_ascii_uppercase();
+    let digits=raw.strip_suffix('G').unwrap_or(&raw);
+    let gigabytes=digits.parse::<u8>().map_err(|_|"Memory must be a whole number of gigabytes.".to_string())?;
+    if !(1..=32).contains(&gigabytes) { return Err("Minecraft memory must be between 1 GB and 32 GB.".into()); }
+    Ok(format!("{gigabytes}G"))
+}
 
 fn credential_entry(user: &str) -> Result<Entry, String> {
     Entry::new(KEYRING_SERVICE, user)
@@ -208,7 +215,7 @@ async fn minecraft_versions() -> Result<Value, String> {
 }
 
 #[tauri::command]
-async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) -> Result<Value, String> {
+async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String, memory_max: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let folder = instance_folder(&name)?;
     let metadata: Value = serde_json::from_slice(
@@ -263,7 +270,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
         options.loader.build = loader_build.clone();
         options.loader.enable = true;
     }
-    options.memory.max = "4G".to_owned();
+    options.memory.max = normalize_memory(memory_max)?;
     options.download_concurrency = 8;
 
     let launch = Launch::new(options, account)
@@ -282,7 +289,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
 }
 
 #[tauri::command]
-async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>) -> Result<(), String> {
+async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>, memory_max: Option<String>) -> Result<(), String> {
     let mut version = version.trim().to_owned();
     let mut loader = loader.unwrap_or_else(|| "vanilla".to_owned());
     let mut loader_build = loader_build.unwrap_or_else(|| "latest".to_owned());
@@ -354,7 +361,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         options.loader.build = loader_build;
         options.loader.enable = true;
     }
-    options.memory.max = "4G".to_owned();
+    options.memory.max = normalize_memory(memory_max)?;
     options.download_concurrency = 8;
 
     let launch=Launch::new(options,account).map_err(|e|format!("Could not prepare Minecraft: {e}"))?;
