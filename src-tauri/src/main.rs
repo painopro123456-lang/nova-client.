@@ -3,7 +3,6 @@
 use crust_core::authenticator::{Account, Authenticator};
 use crust_core::foundation::events::Event;
 use crust_core::launcher::{Launch, LaunchOptions, LoaderKind};
-use keyring::Entry;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
@@ -16,8 +15,6 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
 use tauri::Emitter;
 
-const KEYRING_SERVICE: &str = "NOVA Client";
-const MINECRAFT_ACCOUNT_USER: &str = "minecraft-account";
 const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
 const MICROSOFT_CLIENT_ID: &str = "09e6a2a2-90ee-47a6-92c4-f8810958de91";
 
@@ -273,11 +270,7 @@ async fn refresh_saved_minecraft_account(saved_account: &Account) -> Result<Acco
             format!("Microsoft session could not be refreshed. Sign in again: {e}")
         })?;
     game_log("Saved Microsoft/Minecraft session refreshed successfully.");
-    let refreshed_json = serde_json::to_string(&account)
-        .map_err(|e| format!("Could not update the saved account: {e}"))?;
-    credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .set_password(&refreshed_json)
-        .map_err(|e| format!("Could not update the secure account store: {e}"))?;
+    save_minecraft_account(&account)?;
     Ok(account)
 }
 
@@ -362,28 +355,125 @@ fn curseforge_download_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Could not initialize the authenticated CurseForge download client: {e}"))
 }
 
-fn credential_entry(user: &str) -> Result<Entry, String> {
-    Entry::new(KEYRING_SERVICE, user)
-        .map_err(|e| format!("Windows Credential Manager is unavailable: {e}"))
+// Microsoft refresh tokens are stored in NOVA's own app-data folder and
+// protected with Windows DPAPI. This does not create or read Credential Manager
+// entries and does not display any Windows credential prompts.
+#[cfg(windows)]
+fn account_store_path() -> Result<PathBuf, String> {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| "Windows app-data folder could not be found.".to_string())?;
+    Ok(base.join("NOVA Client").join("auth").join("account.dat"))
+}
+
+#[cfg(windows)]
+fn protect_account_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
+    use winapi::um::dpapi::CryptProtectData;
+    use winapi::um::wincrypt::{DATA_BLOB, CRYPTPROTECT_UI_FORBIDDEN};
+    use winapi::um::winbase::LocalFree;
+    use winapi::um::errhandlingapi::GetLastError;
+    use std::ptr::null_mut;
+
+    let mut source = DATA_BLOB { cbData: input.len() as u32, pbData: input.as_ptr() as *mut u8 };
+    let mut output = DATA_BLOB { cbData: 0, pbData: null_mut() };
+    let ok = unsafe {
+        CryptProtectData(&mut source, std::ptr::null(), null_mut(), null_mut(), null_mut(),
+            CRYPTPROTECT_UI_FORBIDDEN, &mut output)
+    };
+    if ok == 0 {
+        return Err(format!("Windows could not encrypt NOVA's account data (error {}).", unsafe { GetLastError() }));
+    }
+    let encrypted = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+    unsafe { LocalFree(output.pbData as *mut _) };
+    Ok(encrypted)
+}
+
+#[cfg(windows)]
+fn unprotect_account_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
+    use winapi::um::dpapi::CryptUnprotectData;
+    use winapi::um::wincrypt::DATA_BLOB;
+    use winapi::um::winbase::LocalFree;
+    use winapi::um::errhandlingapi::GetLastError;
+    use std::ptr::null_mut;
+
+    let mut source = DATA_BLOB { cbData: input.len() as u32, pbData: input.as_ptr() as *mut u8 };
+    let mut output = DATA_BLOB { cbData: 0, pbData: null_mut() };
+    let ok = unsafe {
+        CryptUnprotectData(&mut source, null_mut(), null_mut(), null_mut(), null_mut(), 0, &mut output)
+    };
+    if ok == 0 {
+        return Err(format!("Windows could not decrypt NOVA's saved account (error {}). Sign in again to save a fresh session.", unsafe { GetLastError() }));
+    }
+    let decrypted = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+    unsafe { LocalFree(output.pbData as *mut _) };
+    Ok(decrypted)
+}
+
+#[cfg(windows)]
+fn save_minecraft_account(account: &Account) -> Result<(), String> {
+    let json = serde_json::to_vec(account)
+        .map_err(|e| format!("Could not prepare the Microsoft account for saving: {e}"))?;
+    let encrypted = protect_account_bytes(&json)?;
+    let path = account_store_path()?;
+    let parent = path.parent().ok_or("NOVA account folder is invalid.")?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("Could not create NOVA's private account folder: {e}"))?;
+    let temporary = parent.join(format!("account-{}.tmp", std::process::id()));
+    std::fs::write(&temporary, encrypted)
+        .map_err(|e| format!("Could not save NOVA's encrypted account file: {e}"))?;
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Could not replace NOVA's previous saved account: {e}"))?;
+    }
+    std::fs::rename(&temporary, &path)
+        .map_err(|e| format!("Could not finish saving NOVA's encrypted account: {e}"))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn load_minecraft_account() -> Result<Option<Account>, String> {
+    let path = account_store_path()?;
+    let encrypted = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Could not read NOVA's saved account file: {error}")),
+    };
+    let decrypted = unprotect_account_bytes(&encrypted)?;
+    let account = serde_json::from_slice(&decrypted)
+        .map_err(|e| format!("NOVA's saved Microsoft session is invalid: {e}. Sign in again."))?;
+    Ok(Some(account))
+}
+
+#[cfg(windows)]
+fn delete_minecraft_account() -> Result<(), String> {
+    let path = account_store_path()?;
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Could not remove NOVA's saved account: {error}")),
+    }
+}
+
+#[cfg(not(windows))]
+fn save_minecraft_account(_: &Account) -> Result<(), String> {
+    Err("NOVA's encrypted account storage is currently supported on Windows only.".into())
+}
+#[cfg(not(windows))]
+fn load_minecraft_account() -> Result<Option<Account>, String> {
+    Err("NOVA's encrypted account storage is currently supported on Windows only.".into())
+}
+#[cfg(not(windows))]
+fn delete_minecraft_account() -> Result<(), String> {
+    Err("NOVA's encrypted account storage is currently supported on Windows only.".into())
 }
 
 fn read_saved_minecraft_account_json(context: &str) -> Result<String, String> {
-    let entry = credential_entry(MINECRAFT_ACCOUNT_USER)?;
-    match entry.get_password() {
-        Ok(value) if !value.trim().is_empty() => Ok(value),
-        Ok(_) => {
-            game_log(&format!("{context}: Windows Credential Manager returned an empty saved account."));
-            Err("NOVA found an empty saved Microsoft account entry. Please sign in again.".into())
-        }
-        Err(keyring::Error::NoEntry) => {
-            game_log(&format!("{context}: no NOVA Minecraft account entry exists in Windows Credential Manager."));
-            Err("NOVA cannot find a saved Microsoft account in Windows Credential Manager. The login may not have been saved on this Windows profile. Sign in again, then retry.".into())
-        }
-        Err(error) => {
-            game_log(&format!("{context}: Windows Credential Manager read failed: {error:?}"));
-            Err(format!("Windows Credential Manager could not read NOVA's saved Microsoft account ({error}). Check the Minecraft launch log for details."))
-        }
-    }
+    let account = load_minecraft_account()?.ok_or_else(|| {
+        game_log(&format!("{context}: no NOVA account file exists; user must sign in."));
+        "No Microsoft account is signed in to NOVA. Click Sign in with Microsoft, then try again.".to_string()
+    })?;
+    serde_json::to_string(&account)
+        .map_err(|e| format!("Could not read NOVA's saved Microsoft account: {e}"))
 }
 
 // The approved NOVA key is injected by GitHub Actions at compile time.
@@ -513,11 +603,7 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
     // AuthorizeRequest validates the OAuth state and PKCE verifier before exchanging the code.
     let account = request.login(&auth, &redirect_url).await
         .map_err(|e| format!("Microsoft sign-in failed: {e}"))?;
-    let account_json = serde_json::to_string(&account)
-        .map_err(|e| format!("Could not prepare the signed-in account: {e}"))?;
-    credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .set_password(&account_json)
-        .map_err(|e| format!("Could not securely save the Minecraft account: {e}"))?;
+    save_minecraft_account(&account)?;
 
     app.emit("nova-login-complete", account.name.clone())
         .map_err(|e| format!("Signed in, but could not update NOVA: {e}"))?;
@@ -526,25 +612,12 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
 
 #[tauri::command]
 fn minecraft_account_name() -> Result<Option<String>, String> {
-    let entry = credential_entry(MINECRAFT_ACCOUNT_USER)?;
-    match entry.get_password() {
-        Ok(value) => {
-            let account: Account = serde_json::from_str(&value)
-                .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
-            Ok(Some(account.name))
-        }
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("Could not read the saved Minecraft account: {e}")),
-    }
+    Ok(load_minecraft_account()?.map(|account| account.name))
 }
 
 #[tauri::command]
 fn sign_out_minecraft() -> Result<(), String> {
-    match credential_entry(MINECRAFT_ACCOUNT_USER)?.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("Could not remove the saved Minecraft account: {e}")),
-    }
+    delete_minecraft_account()
 }
 
 #[tauri::command]
