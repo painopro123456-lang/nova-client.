@@ -621,6 +621,18 @@ async fn download_pack_file(app: &tauri::AppHandle, url: &str, destination: &Pat
     result
 }
 
+fn curseforge_loader_matches(mod_loader_type: u64, loader: &str) -> bool {
+    let expected = match loader.to_ascii_lowercase().as_str() {
+        "forge" => 1,
+        "fabric" => 4,
+        "quilt" => 5,
+        "neoforge" => 6,
+        // CurseForge uses 0 for an unspecified/any loader.
+        _ => return false,
+    };
+    mod_loader_type == 0 || mod_loader_type == expected
+}
+
 fn loader_from_id(id: &str) -> Result<(String, String), String> {
     let (kind, build) = id.split_once('-')
         .ok_or_else(|| format!("The modpack has an unsupported loader identifier: {id}"))?;
@@ -719,6 +731,10 @@ async fn install_mod_to_instance(
             let versions = file["gameVersions"].as_array().ok_or("CurseForge did not list compatible game versions.")?;
             if !versions.iter().any(|v| v.as_str() == Some(minecraft_version.as_str())) {
                 return Err(format!("This mod file does not list Minecraft {minecraft_version} as compatible."));
+            }
+            let mod_loader_type = file["modLoaderType"].as_u64().unwrap_or(0);
+            if !curseforge_loader_matches(mod_loader_type, &loader) {
+                return Err(format!("This CurseForge file does not support the {} loader.", loader));
             }
             let url = if let Some(url) = file["downloadUrl"].as_str() {
                 url.to_owned()
@@ -1050,7 +1066,7 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{safe_instance_name, safe_relative_path};
+    use super::{curseforge_loader_matches, safe_instance_name, safe_relative_path};
 
     #[test]
     fn instance_names_strip_unsafe_characters() {
@@ -1072,6 +1088,17 @@ mod tests {
     fn relative_paths_reject_parent_traversal() {
         assert!(safe_relative_path("mods/../../outside").is_err());
         assert!(safe_relative_path("../outside").is_err());
+    }
+
+    #[test]
+    fn curseforge_loader_types_are_checked() {
+        assert!(curseforge_loader_matches(4, "fabric"));
+        assert!(curseforge_loader_matches(1, "forge"));
+        assert!(curseforge_loader_matches(6, "neoforge"));
+        assert!(curseforge_loader_matches(5, "quilt"));
+        assert!(curseforge_loader_matches(0, "fabric"));
+        assert!(!curseforge_loader_matches(1, "fabric"));
+        assert!(!curseforge_loader_matches(4, "forge"));
     }
 
     #[test]
