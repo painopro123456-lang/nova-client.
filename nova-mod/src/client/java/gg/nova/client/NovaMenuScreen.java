@@ -1,45 +1,144 @@
 package gg.nova.client;
+
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
+
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import java.util.Properties;
+
 public final class NovaMenuScreen extends Screen {
     private static final int PANEL=0xF20D101A, CARD=0xFF171D2B, ACCENT=0xFF9B7CFF, MUTED=0xFF929CB2;
     private final Map<String,Boolean> modules=new LinkedHashMap<>();
+    private final Map<String,String> categories=new LinkedHashMap<>();
     private String category="All";
+    private String settingsModule=null;
+
     public NovaMenuScreen() {
         super(Component.literal("NOVA"));
-        modules.put("Keystrokes",true); modules.put("FPS",true); modules.put("CPS",false);
-        modules.put("Armor Status",false); modules.put("Potion Effects",false); modules.put("Toggle Sprint",false);
-        modules.put("Crosshair",false); modules.put("Clock",false);
+        addModule("Keystrokes",true,"HUD");
+        addModule("FPS",true,"HUD");
+        addModule("CPS",false,"HUD");
+        addModule("Armor Status",false,"HUD");
+        addModule("Potion Effects",false,"HUD");
+        addModule("Toggle Sprint",false,"Player");
+        addModule("Crosshair",false,"Visual");
+        addModule("Clock",false,"HUD");
+        loadStates();
     }
-    @Override public void render(GuiGraphics g,int mx,int my,float delta) {
+
+    private void addModule(String name, boolean enabled, String group) {
+        modules.put(name,enabled);
+        categories.put(name,group);
+    }
+
+    private Path statePath() {
+        return Path.of("config","nova-modules.properties");
+    }
+
+    private void loadStates() {
+        Path path=statePath();
+        if(!Files.isRegularFile(path))return;
+        Properties values=new Properties();
+        try(InputStream input=Files.newInputStream(path)) {
+            values.load(input);
+            for(String name:modules.keySet()) {
+                String stored=values.getProperty(name);
+                if(stored!=null)modules.put(name,Boolean.parseBoolean(stored));
+            }
+        } catch(IOException ignored) { }
+    }
+
+    private void saveStates() {
+        Properties values=new Properties();
+        modules.forEach((name,enabled)->values.setProperty(name,Boolean.toString(enabled)));
+        try {
+            Files.createDirectories(statePath().getParent());
+            try(OutputStream output=Files.newOutputStream(statePath())) {
+                values.store(output,"NOVA module preferences");
+            }
+        } catch(IOException ignored) { }
+    }
+
+    @Override
+    public void render(GuiGraphics g,int mx,int my,float delta) {
         g.fill(0,0,width,height,0xB9000000);
         int pw=Math.min(760,width-40), ph=Math.min(480,height-40), l=(width-pw)/2, t=(height-ph)/2;
-        g.fill(l,t,l+pw,t+ph,PANEL); g.fill(l,t,l+5,t+ph,ACCENT);
+        g.fill(l,t,l+pw,t+ph,PANEL);
+        g.fill(l,t,l+5,t+ph,ACCENT);
         g.drawString(font,"NOVA",l+26,t+22,0xFFFFFFFF,false);
         g.drawString(font,"CLIENT MENU",l+91,t+24,MUTED,false);
         g.drawString(font,"RIGHT SHIFT  -  CLOSE",l+pw-158,t+25,MUTED,false);
         g.fill(l+20,t+48,l+pw-20,t+49,0xFF303849);
+
         String[] cats={"All","HUD","Visual","Player","Mods"};
-        for(int i=0;i<cats.length;i++){int y=t+68+i*35; boolean a=category.equals(cats[i]); if(a)g.fill(l+20,y-5,l+152,y+22,0xFF29233E); g.drawString(font,cats[i],l+30,y+3,a?ACCENT:0xFFD7DCE8,false);}
-        int cx=l+178, cy=t+70, cw=(pw-220)/2;
+        for(int i=0;i<cats.length;i++) {
+            int y=t+68+i*35;
+            boolean selected=category.equals(cats[i]);
+            if(selected)g.fill(l+20,y-5,l+152,y+22,0xFF29233E);
+            g.drawString(font,cats[i],l+30,y+3,selected?ACCENT:0xFFD7DCE8,false);
+        }
+
+        int cx=l+178,cy=t+70,cw=(pw-220)/2;
         g.drawString(font,category.equals("All")?"Modules":category,cx,cy,0xFFFFFFFF,false);
-        g.drawString(font,"Clean tools. Your game, your layout.",cx,cy+17,MUTED,false);
-        int i=0;
-        for(var e:modules.entrySet()){int col=i%2,row=i/2,x=cx+col*(cw+12),y=cy+48+row*72; g.fill(x,y,x+cw,y+62,CARD); g.drawString(font,e.getKey(),x+12,y+13,0xFFFFFFFF,false); g.drawString(font,"NOVA module",x+12,y+34,MUTED,false); g.fill(x+cw-42,y+20,x+cw-14,y+34,e.getValue()?ACCENT:0xFF414A5D); g.fill(x+cw-(e.getValue()?26:40),y+22,x+cw-(e.getValue()?16:30),y+32,0xFFFFFFFF); i++;}
+        g.drawString(font,"Saved module preferences",cx,cy+17,MUTED,false);
+        int visible=0;
+        for(var entry:modules.entrySet()) {
+            if(!category.equals("All")&&!category.equals(categories.get(entry.getKey())))continue;
+            int col=visible%2,row=visible/2,x=cx+col*(cw+12),y=cy+48+row*72;
+            g.fill(x,y,x+cw,y+62,CARD);
+            g.drawString(font,entry.getKey(),x+12,y+13,0xFFFFFFFF,false);
+            g.drawString(font,categories.get(entry.getKey())+" module",x+12,y+34,MUTED,false);
+            g.drawString(font,"⚙",x+cw-19,y+13,0xFFD7DCE8,false);
+            g.fill(x+cw-56,y+20,x+cw-28,y+34,entry.getValue()?ACCENT:0xFF414A5D);
+            g.fill(x+cw-(entry.getValue()?40:54),y+22,x+cw-(entry.getValue()?30:44),y+32,0xFFFFFFFF);
+            visible++;
+        }
+        if(visible==0)g.drawString(font,"No modules in this category yet.",cx,cy+58,MUTED,false);
+
+        if(settingsModule!=null) {
+            int sy=t+ph-76;
+            g.fill(cx,sy,l+pw-24,sy+50,0xFF242B3B);
+            g.drawString(font,"SETTINGS  ·  "+settingsModule,cx+12,sy+8,0xFFFFFFFF,false);
+            g.drawString(font,"Preference saved locally when you toggle this module.",cx+12,sy+27,MUTED,false);
+            g.drawString(font,"CLICK TO CLOSE",l+pw-118,sy+8,ACCENT,false);
+        }
         g.drawString(font,"NOVA IN-GAME  -  EARLY DEVELOPMENT",l+26,t+ph-24,MUTED,false);
         super.render(g,mx,my,delta);
     }
-    @Override public boolean mouseClicked(double mx,double my,int button) {
+
+    @Override
+    public boolean mouseClicked(double mx,double my,int button) {
         if(button!=0)return super.mouseClicked(mx,my,button);
         int pw=Math.min(760,width-40),ph=Math.min(480,height-40),l=(width-pw)/2,t=(height-ph)/2;
         String[] cats={"All","HUD","Visual","Player","Mods"};
-        for(int i=0;i<cats.length;i++){int y=t+68+i*35;if(mx>=l+20&&mx<=l+152&&my>=y-5&&my<=y+22){category=cats[i];return true;}}
-        int cx=l+178,cy=t+70,cw=(pw-220)/2,i=0;
-        for(var e:modules.entrySet()){int col=i%2,row=i/2,x=cx+col*(cw+12),y=cy+48+row*72;if(mx>=x&&mx<=x+cw&&my>=y&&my<=y+62){modules.put(e.getKey(),!e.getValue());return true;}i++;}
+        for(int i=0;i<cats.length;i++) {
+            int y=t+68+i*35;
+            if(mx>=l+20&&mx<=l+152&&my>=y-5&&my<=y+22) {
+                category=cats[i];settingsModule=null;return true;
+            }
+        }
+        int cx=l+178,cy=t+70,cw=(pw-220)/2,visible=0;
+        for(var entry:modules.entrySet()) {
+            if(!category.equals("All")&&!category.equals(categories.get(entry.getKey())))continue;
+            int col=visible%2,row=visible/2,x=cx+col*(cw+12),y=cy+48+row*72;
+            if(mx>=x&&mx<=x+cw&&my>=y&&my<=y+62) {
+                if(mx>=x+cw-26)settingsModule=entry.getKey();
+                else {modules.put(entry.getKey(),!entry.getValue());saveStates();settingsModule=null;}
+                return true;
+            }
+            visible++;
+        }
+        if(settingsModule!=null) {settingsModule=null;return true;}
         return super.mouseClicked(mx,my,button);
     }
-    @Override public boolean isPauseScreen(){return false;}
+
+    @Override
+    public boolean isPauseScreen() { return false; }
 }
