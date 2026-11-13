@@ -227,6 +227,27 @@ fn download_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Could not initialize the download client: {e}"))
 }
 
+fn is_curseforge_cdn_url(url: &str) -> bool {
+    reqwest::Url::parse(url).ok()
+        .is_some_and(|parsed| parsed.scheme() == "https" && parsed.host_str() == Some("edge.forgecdn.net"))
+}
+
+fn curseforge_download_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(1800))
+        // Keep the CurseForge API key on the trusted CDN host only. Never forward
+        // x-api-key if the CDN redirects to a different host.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let next_host = attempt.url().host_str();
+            let changed_host = attempt.previous().last()
+                .is_some_and(|previous| previous.host_str() != next_host);
+            if changed_host { attempt.stop() } else { attempt.follow() }
+        }))
+        .build()
+        .map_err(|e| format!("Could not initialize the authenticated CurseForge download client: {e}"))
+}
+
 fn credential_entry(user: &str) -> Result<Entry, String> {
     Entry::new(KEYRING_SERVICE, user)
         .map_err(|e| format!("Windows Credential Manager is unavailable: {e}"))
@@ -668,10 +689,24 @@ fn extract_pack_overrides(archive_path: &Path, prefix: &str, destination: &Path)
 }
 
 async fn download_pack_archive(app: &tauri::AppHandle, url: &str, destination: &Path) -> Result<(), String> {
+    download_pack_archive_with_curseforge_key(app, url, destination, None).await
+}
+
+async fn download_pack_archive_with_curseforge_key(
+    app: &tauri::AppHandle,
+    url: &str,
+    destination: &Path,
+    api_key: Option<&str>,
+) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());
     }
-    let response = download_client()?.get(url).send().await
+    let client = if api_key.is_some() { curseforge_download_client()? } else { download_client()? };
+    let mut request = client.get(url);
+    if let Some(key) = api_key.filter(|_| is_curseforge_cdn_url(url)) {
+        request = request.header("x-api-key", key);
+    }
+    let response = request.send().await
         .map_err(|e| format!("Archive download failed: {e}"))?
         .error_for_status().map_err(|e| format!("Archive server returned an error: {e}"))?;
     if response.url().scheme() != "https" {
@@ -771,13 +806,29 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
 }
 
 async fn download_pack_file(app: &tauri::AppHandle, url: &str, destination: &Path, expected_size: Option<u64>, expected_sha1: Option<&str>) -> Result<(), String> {
+    download_pack_file_with_curseforge_key(app, url, destination, expected_size, expected_sha1, None).await
+}
+
+async fn download_pack_file_with_curseforge_key(
+    app: &tauri::AppHandle,
+    url: &str,
+    destination: &Path,
+    expected_size: Option<u64>,
+    expected_sha1: Option<&str>,
+    api_key: Option<&str>,
+) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());
     }
     if expected_size.is_some_and(|size| size > MAX_ARCHIVE_FILE_BYTES) {
         return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
     }
-    let response = download_client()?.get(url).send().await
+    let client = if api_key.is_some() { curseforge_download_client()? } else { download_client()? };
+    let mut request = client.get(url);
+    if let Some(key) = api_key.filter(|_| is_curseforge_cdn_url(url)) {
+        request = request.header("x-api-key", key);
+    }
+    let response = request.send().await
         .map_err(|e| format!("Mod download failed: {e}"))?
         .error_for_status().map_err(|e| format!("Mod download server returned an error: {e}"))?;
     if response.url().scheme() != "https" {
@@ -1245,7 +1296,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
     let archive_path = folder.join(".nova-curseforge-pack.zip");
     emit_pack_progress(&app, "archive", 0, 0, "Downloading CurseForge archive");
-    download_pack_archive(&app, &manifest_url, &archive_path).await?;
+    download_pack_archive_with_curseforge_key(&app, &manifest_url, &archive_path, Some(&api_key)).await?;
     let mut archive = ZipArchive::new(std::fs::File::open(&archive_path)
         .map_err(|e| format!("Could not open downloaded CurseForge archive: {e}"))?)
         .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
@@ -1331,7 +1382,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         let destination = mods_folder.join(&filename);
         let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let staging = mods_folder.join(format!(".{filename}.{}.{sequence}.partial", std::process::id()));
-        download_pack_file(&app, &url, &staging, Some(expected_size), Some(expected_sha1)).await
+        download_pack_file_with_curseforge_key(&app, &url, &staging, Some(expected_size), Some(expected_sha1), Some(&api_key)).await
             .map_err(|e| format!("Could not save CurseForge mod {}: {e}", i+1))?;
         let jar_check = std::fs::File::open(&staging)
             .map_err(|e| format!("Could not verify CurseForge mod {}: {e}", i+1))
@@ -1466,6 +1517,14 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
 mod tests {
     use super::{curseforge_loader_matches, modrinth_minecraft_version, safe_instance_name, safe_relative_path, InstanceReservation, TEMP_FILE_COUNTER};
     use serde_json::json;
+
+    #[test]
+    fn curseforge_cdn_authentication_is_limited_to_official_https_host() {
+        assert!(super::is_curseforge_cdn_url("https://edge.forgecdn.net/files/1/2/mod.jar"));
+        assert!(!super::is_curseforge_cdn_url("http://edge.forgecdn.net/files/1/2/mod.jar"));
+        assert!(!super::is_curseforge_cdn_url("https://example.com/mod.jar"));
+        assert!(!super::is_curseforge_cdn_url("https://edge.forgecdn.net.evil.example/mod.jar"));
+    }
 
     #[test]
     fn updater_compares_release_versions_numerically() {
