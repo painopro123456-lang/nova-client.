@@ -488,6 +488,9 @@ async fn download_pack_archive(app: &tauri::AppHandle, url: &str, destination: &
     let response = http_client()?.get(url).send().await
         .map_err(|e| format!("Archive download failed: {e}"))?
         .error_for_status().map_err(|e| format!("Archive server returned an error: {e}"))?;
+    if response.url().scheme() != "https" {
+        return Err("The archive download redirected to an insecure connection; it was blocked.".into());
+    }
     let total = response.content_length();
     if total.is_some_and(|size| size > MAX_ARCHIVE_TOTAL_BYTES) {
         return Err("The downloaded archive exceeds NOVA's 2 GiB safety limit.".into());
@@ -558,6 +561,9 @@ async fn download_pack_file(app: &tauri::AppHandle, url: &str, destination: &Pat
     let response = http_client()?.get(url).send().await
         .map_err(|e| format!("Mod download failed: {e}"))?
         .error_for_status().map_err(|e| format!("Mod download server returned an error: {e}"))?;
+    if response.url().scheme() != "https" {
+        return Err("The mod download redirected to an insecure connection; it was blocked.".into());
+    }
     let expected_total = response.content_length().or(expected_size);
     if response.content_length().is_some_and(|size| size > MAX_ARCHIVE_FILE_BYTES) {
         return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
@@ -821,6 +827,12 @@ async fn install_mod_to_instance_inner(
 #[tauri::command]
 async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    if project_id.is_empty() || !project_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("The selected Modrinth modpack project ID is invalid.".into());
+    }
+    if version_id.as_deref().is_some_and(|id| id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
+        return Err("The selected Modrinth modpack version ID is invalid.".into());
+    }
     let client = http_client()?;
     let versions: Value = client.get(format!("https://api.modrinth.com/v2/project/{project_id}/version"))
         .send().await.map_err(|e| format!("Could not reach Modrinth: {e}"))?
@@ -921,6 +933,9 @@ async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
 #[tauri::command]
 async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    if mod_id.parse::<u64>().ok().filter(|id| *id > 0).is_none() {
+        return Err("The selected CurseForge modpack project ID is invalid.".into());
+    }
     let api_key = curseforge_api_key()?;
     let client = http_client()?;
     let mut headers = HeaderMap::new();
@@ -1046,7 +1061,13 @@ fn create_instance(instance_name: String, display_name: String, version: String,
         "loaderVersion": loader_version,
         "source": "custom"
     });
-    save_instance_metadata(&folder, metadata)
+    match save_instance_metadata(&folder, metadata) {
+        Ok(saved) => Ok(saved),
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&folder);
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command]
