@@ -18,10 +18,10 @@ const navGroups = [
 ];
 
 
-function Sidebar({ page, setPage }) {
+function Sidebar({ page, setPage, signedIn, accountName }) {
   return <aside className="sidebar">
     <div className="brand"><div className="brand-mark"><Moon size={19}/></div><div><b>NOVA</b><span>CLIENT</span></div><span className="build-tag">BETA</span></div>
-    <div className="profile-card"><div className="avatar">N</div><div className="profile-copy"><b>Guest profile</b><span>Sign in to continue</span></div><ChevronDown size={15}/></div>
+    <div className="profile-card"><div className="avatar">N</div><div className="profile-copy"><b>{signedIn ? (accountName || "Microsoft account") : "Guest profile"}</b><span>{signedIn ? "Minecraft account connected" : "Sign in to continue"}</span></div><ChevronDown size={15}/></div>
     <nav>{navGroups.map(group => <section className="nav-group" key={group.label}><div className="nav-label">{group.label}</div>{group.items.map(item => <button key={item.id} className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => setPage(item.id)}><item.icon size={17}/><span>{item.label}</span>{item.id === "pvp" && <span className="nav-dot"/>}</button>)}</section>)}</nav>
     <div className="sidebar-bottom"><div className="status-line"><span className="status-pulse"/><span>Launcher UI preview</span></div><button className="help-link" onClick={() => setPage("settings")}><CircleHelp size={16}/> Help & support</button><div className="sidebar-foot">NOVA CLIENT <span>0.1.0</span></div></div>
   </aside>;
@@ -290,8 +290,10 @@ export default function App() {
     let offLink;
     let offComplete;
     (async () => {
-      offLink = await listen("nova-login-link", event => { if (alive) { setLoginUrl(event.payload); setMessage("Microsoft sign-in opened in your browser. Complete the sign-in there. If it did not open, use the link below."); } });
-      offComplete = await listen("nova-login-complete", event => { if (alive) { setSignedIn(true); setAccountName(event.payload); setLoginUrl(""); setMessage("Microsoft account connected."); } });
+      const stopLink = await listen("nova-login-link", event => { if (alive) { setLoginUrl(event.payload); setMessage("Microsoft sign-in opened in your browser. Complete the sign-in there. If it did not open, use the link below."); } });
+      if (alive) offLink = stopLink; else stopLink();
+      const stopComplete = await listen("nova-login-complete", event => { if (alive) { setSignedIn(true); setAccountName(event.payload); setLoginUrl(""); setMessage("Microsoft account connected."); } });
+      if (alive) offComplete = stopComplete; else stopComplete();
       try {
         const name = await invoke("minecraft_account_name");
         if (alive && name) { setSignedIn(true); setAccountName(name); }
@@ -316,5 +318,5 @@ export default function App() {
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances versions={versions}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/><div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false}/> : page === "modpacks" ? <Catalog packs={true}/> : page === "instances" ? <LocalInstances versions={versions}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
