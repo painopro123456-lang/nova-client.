@@ -1552,10 +1552,12 @@ mod tests {
     use serde_json::json;
 
     #[test]
-    fn curseforge_cdn_authentication_is_limited_to_official_https_host() {
+    fn curseforge_cdn_authentication_is_limited_to_official_https_hosts() {
         assert!(super::is_curseforge_cdn_url("https://edge.forgecdn.net/files/1/2/mod.jar"));
+        assert!(super::is_curseforge_cdn_url("https://mediafilez.forgecdn.net/files/1/2/mod.jar"));
         assert!(!super::is_curseforge_cdn_url("http://edge.forgecdn.net/files/1/2/mod.jar"));
         assert!(!super::is_curseforge_cdn_url("https://example.com/mod.jar"));
+        assert!(!super::is_curseforge_cdn_url("https://mediafilez.forgecdn.net.evil.example/mod.jar"));
         assert!(!super::is_curseforge_cdn_url("https://edge.forgecdn.net.evil.example/mod.jar"));
     }
 
