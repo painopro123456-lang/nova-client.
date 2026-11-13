@@ -227,22 +227,33 @@ fn download_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Could not initialize the download client: {e}"))
 }
 
+fn is_curseforge_cdn_host(host: &str) -> bool {
+    matches!(host, "edge.forgecdn.net" | "mediafilez.forgecdn.net")
+}
+
 fn is_curseforge_cdn_url(url: &str) -> bool {
     reqwest::Url::parse(url).ok()
-        .is_some_and(|parsed| parsed.scheme() == "https" && parsed.host_str() == Some("edge.forgecdn.net"))
+        .is_some_and(|parsed| parsed.scheme() == "https"
+            && parsed.host_str().is_some_and(is_curseforge_cdn_host))
 }
 
 fn curseforge_download_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
         .timeout(Duration::from_secs(1800))
-        // Keep the CurseForge API key on the trusted CDN host only. Never forward
-        // x-api-key if the CDN redirects to a different host.
+        // CurseForge can move a file from edge.forgecdn.net to its mediafilez
+        // CDN. Follow only redirects between these exact trusted hosts so the
+        // API key is never forwarded to an unrelated domain.
         .redirect(reqwest::redirect::Policy::custom(|attempt| {
-            let next_host = attempt.url().host_str();
-            let changed_host = attempt.previous().last()
-                .is_some_and(|previous| previous.host_str() != next_host);
-            if changed_host { attempt.stop() } else { attempt.follow() }
+            let next_host = attempt.url().host_str().unwrap_or("");
+            let previous_host = attempt.previous().last()
+                .and_then(|previous| previous.host_str()).unwrap_or("");
+            if next_host == previous_host
+                || (is_curseforge_cdn_host(next_host) && is_curseforge_cdn_host(previous_host)) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
         }))
         .build()
         .map_err(|e| format!("Could not initialize the authenticated CurseForge download client: {e}"))
@@ -707,10 +718,21 @@ async fn download_pack_archive_with_curseforge_key(
         request = request.header("x-api-key", key);
     }
     let response = request.send().await
-        .map_err(|e| format!("Archive download failed: {e}"))?
-        .error_for_status().map_err(|e| format!("Archive server returned an error: {e}"))?;
+        .map_err(|e| format!("Archive download failed: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        if status.is_redirection() && api_key.is_some() {
+            return Err("CurseForge redirected the archive to an untrusted download host. NOVA stopped the download rather than risk sending credentials or saving a redirect page as a ZIP.".into());
+        }
+        return Err(format!("Archive server returned HTTP {status}; no archive was saved."));
+    }
     if response.url().scheme() != "https" {
         return Err("The archive download redirected to an insecure connection; it was blocked.".into());
+    }
+    if response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains("text/html")) {
+        return Err("The archive server returned a web page instead of a ZIP file. CurseForge may have blocked or redirected this download; try another pack version.".into());
     }
     let total = response.content_length();
     if total.is_some_and(|size| size > MAX_ARCHIVE_TOTAL_BYTES) {
@@ -755,6 +777,17 @@ async fn download_pack_archive_with_curseforge_key(
         }
         file.flush().await.map_err(|e| format!("Could not flush downloaded archive: {e}"))?;
         drop(file);
+        // Validate the ZIP central directory before promoting the temporary file.
+        // This catches HTML/error bodies and truncated CDN responses at download
+        // time, instead of leaving a corrupt archive for the installer to extract.
+        let zip_check = std::fs::File::open(&temporary)
+            .map_err(|e| format!("Could not verify downloaded archive: {e}"))
+            .and_then(|archive| ZipArchive::new(archive).map(|_| ())
+                .map_err(|e| format!("The download did not contain a complete valid ZIP archive: {e}")));
+        if let Err(error) = zip_check {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(error);
+        }
         replace_file(&temporary, destination)
             .map_err(|e| format!("Could not finalize downloaded archive: {e}"))?;
         Ok(())
