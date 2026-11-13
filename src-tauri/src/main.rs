@@ -1117,13 +1117,14 @@ mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let archive_path=root.join("pack.zip");
         let mut archive=zip::ZipWriter::new(File::create(&archive_path).unwrap());
-        archive.start_file("overrides/../../outside.txt",zip::write::SimpleFileOptions::default()).unwrap();
+        let escaped_name=format!("nova-escape-{}.txt",std::process::id());
+        archive.start_file(format!("overrides/../../{escaped_name}"),zip::write::SimpleFileOptions::default()).unwrap();
         archive.write_all(b"blocked").unwrap();
         archive.finish().unwrap();
         let destination=root.join("instance");
         std::fs::create_dir_all(&destination).unwrap();
         assert!(extract_pack_overrides(&archive_path,"overrides/",&destination,"test").is_err());
-        assert!(!root.join("outside.txt").exists());
+        assert!(!root.parent().unwrap().join(&escaped_name).exists());
         std::fs::remove_dir_all(root).unwrap();
     }
 
