@@ -23,7 +23,7 @@ function Sidebar({ page, setPage, signedIn, accountName, onSignOut }) {
     <div className="brand"><div className="brand-mark"><Moon size={19}/></div><div><b>NOVA</b><span>CLIENT</span></div><span className="build-tag">BETA</span></div>
     <div className="profile-card"><div className="avatar">N</div><div className="profile-copy"><b>{signedIn ? (accountName || "Microsoft account") : "Guest profile"}</b><span>{signedIn ? "Minecraft account connected" : "Sign in to continue"}</span></div><ChevronDown size={15}/></div>
     <nav>{navGroups.map(group => <section className="nav-group" key={group.label}><div className="nav-label">{group.label}</div>{group.items.map(item => <button key={item.id} className={page === item.id ? "nav-item active" : "nav-item"} onClick={() => setPage(item.id)}><item.icon size={17}/><span>{item.label}</span>{item.id === "pvp" && <span className="nav-dot"/>}</button>)}</section>)}</nav>
-    <div className="sidebar-bottom"><div className="status-line"><span className="status-pulse"/><span>Launcher UI preview</span></div>{signedIn && <button className="help-link" onClick={onSignOut}>Sign out of Microsoft</button>}<button className="help-link" onClick={() => setPage("settings")}><CircleHelp size={16}/> Help & support</button><div className="sidebar-foot">NOVA CLIENT <span>0.1.0</span></div></div>
+    <div className="sidebar-bottom"><div className="status-line"><span className="status-pulse"/><span>NOVA launcher</span></div>{signedIn && <button className="help-link" onClick={onSignOut}>Sign out of Microsoft</button>}<button className="help-link" onClick={() => setPage("settings")}><CircleHelp size={16}/> Help & support</button><div className="sidebar-foot">NOVA CLIENT <span>0.1.0</span></div></div>
   </aside>;
 }
 
@@ -53,7 +53,7 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versi
     </div>
     <div className="section-heading"><div><div className="eyebrow">READY WHEN YOU ARE</div><h2>Quick launch</h2></div><button className="text-button" onClick={() => onNavigate("instances")}>All instances <ArrowUpRight size={14}/></button></div>
     <div className="quick-card"><div className="minecraft-icon"><Box size={22}/></div><div className="quick-info"><b>{loaderType === "fabric" ? "Fabric Minecraft" : "Vanilla Minecraft"}</b><span>{selectedVersion || "Select a game version"} · {loaderType === "fabric" ? "Fabric Loader" : "Clean profile"}</span></div><div className="version-select"><label>GAME VERSION</label><select value={selectedVersion} onChange={e => setSelectedVersion(e.target.value)} disabled={versionsLoading || versions.length === 0}><option value="" disabled>{versionsLoading ? "Loading versions…" : "Choose a version"}</option>{versions.map(v => <option key={v.id} value={v.id}>{v.id}{v.type === "snapshot" ? " · Snapshot" : ""}</option>)}</select></div><div className="version-select"><label>MOD LOADER</label><select value={loaderType} onChange={e => setLoaderType(e.target.value)}><option value="vanilla">Vanilla</option><option value="fabric">Fabric</option></select></div><button className="small-play" onClick={onLaunch} disabled={launching || !signedIn || versionsLoading || !selectedVersion}><Play size={15} fill="currentColor"/> Launch</button></div>
-    <div className="feature-grid"><div className="feature-card"><div className="feature-icon purple"><Gauge size={18}/></div><b>Performance first</b><p>A native Rust shell is the foundation. No performance claims until benchmarks exist.</p><span className="feature-status">IN DEVELOPMENT</span></div><div className="feature-card"><div className="feature-icon blue"><Blocks size={18}/></div><b>Your mod library</b><p>Planned browsing and installs through trusted mod platforms.</p><span className="feature-status">PLANNED</span></div><div className="feature-card"><div className="feature-icon green"><ShieldCheck size={18}/></div><b>Profiles that stay yours</b><p>Keep game versions and configurations organized by instance.</p><span className="feature-status">PLANNED</span></div></div>
+    <div className="feature-grid"><div className="feature-card"><div className="feature-icon purple"><Gauge size={18}/></div><b>Performance first</b><p>A native Rust shell is the foundation. No performance claims until benchmarks exist.</p><span className="feature-status">IN DEVELOPMENT</span></div><div className="feature-card"><div className="feature-icon blue"><Blocks size={18}/></div><b>Your mod library</b><p>Browse Modrinth and CurseForge, then install compatible mods into an existing modded instance.</p><span className="feature-status">PLANNED</span></div><div className="feature-card"><div className="feature-icon green"><ShieldCheck size={18}/></div><b>Profiles that stay yours</b><p>Create isolated Minecraft instances and keep their modpacks and settings organized.</p><span className="feature-status">AVAILABLE</span></div></div>
   </>;
 }
 
@@ -135,14 +135,14 @@ function Catalog({ packs, active, memoryMb }) {
       let versions=[];
       if(provider==="modrinth"){
         const response=await fetch("https://api.modrinth.com/v2/project/"+encodeURIComponent(project.id)+"/version");
-        if(!response.ok)throw new Error("Could not load modpack versions from Modrinth.");
+        if(!response.ok)throw new Error("Could not load versions from Modrinth.");
         const data=await response.json();
         versions=(data||[]).map(v=>({id:v.id,label:(v.name||v.version_number||v.id)+" · MC "+(v.game_versions||[]).join(", ")+" · "+(v.loaders||[]).join("/"),published:v.date_published||""}));
       }else{
         const data=await invoke("curseforge_modpack_versions",{modId:String(project.id)});
         versions=(data||[]).map(v=>({id:String(v.id),label:(v.displayName||v.fileName||("File "+v.id))+" · MC "+((v.gameVersions||[]).join(", ")||"version not listed"),published:v.fileDate||""}));
       }
-      if(!versions.length)throw new Error("This modpack has no downloadable versions.");
+      if(!versions.length)throw new Error("This project has no downloadable versions.");
       setPackVersions(versions);setSelectedPackVersion(versions[0].id);
     }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Could not load modpack versions."));setVersionProject(null);}
     finally{setPackVersionsBusy(false);}
@@ -183,9 +183,9 @@ function Catalog({ packs, active, memoryMb }) {
       setInstallDialog({name:metadata.name||project.title,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""});
       setPackActionMessage((metadata.name||project.title)+" is fully installed and ready to play.");
     }catch(e){
-      const reason=typeof e==="string"?e:(e.message||"Modpack installation failed.");
-      try{await invoke("delete_instance",{instanceName});}catch{/* Ignore cleanup errors; show the original installation failure. */}
-      setInstallDialog(current=>({...current,done:true,error:reason,status:"Installation failed",detail:"The incomplete instance was cleaned up where possible. You can safely retry."}));
+      const reason=typeof e==="string"?e:(e.message||(packs?"Modpack installation failed.":"Mod installation failed."));
+      if(packs){try{await invoke("delete_instance",{instanceName});}catch{/* Ignore cleanup errors; show the original installation failure. */}}
+      setInstallDialog(current=>({...current,done:true,error:reason,status:packs?"Installation failed":"Mod installation failed",detail:packs?"The incomplete instance was cleaned up where possible. You can safely retry.":"No existing instance was deleted. Check compatibility and try again."}));
       setPackActionMessage((project.title)+" installation failed: "+reason);
     }finally{setInstallingId("");}
   };
