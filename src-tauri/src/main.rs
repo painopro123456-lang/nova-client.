@@ -14,6 +14,7 @@ use std::sync::{Mutex, OnceLock};
 use std::collections::HashSet;
 use zip::ZipArchive;
 use tauri::Emitter;
+use futures_util::StreamExt;
 
 const KEYRING_SERVICE: &str = "NOVA Client";
 const MINECRAFT_ACCOUNT_USER: &str = "minecraft-account";
@@ -494,21 +495,28 @@ fn write_atomic(destination:&Path,bytes:&[u8])->Result<(),String>{
     std::fs::rename(&temp,destination).map_err(|e|{let _=std::fs::remove_file(&temp);format!("Could not finalize downloaded file: {e}")})
 }
 
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
-    if !url.starts_with("https://") { return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into()); }
-    let response=http_client()?.get(url).send().await
-        .map_err(|e|format!("Download failed: {e}"))?
+async fn fetch_bytes_with_progress(url:&str,app:&tauri::AppHandle,phase:&str,detail:&str)->Result<Vec<u8>,String>{
+    if !url.starts_with("https://"){return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());}
+    let response=http_client()?.get(url).send().await.map_err(|e|format!("Download failed: {e}"))?
         .error_for_status().map_err(|e|format!("Download server returned an error: {e}"))?;
-    if response.content_length().is_some_and(|size|size>MAX_ARCHIVE_BYTES as u64) {
-        return Err("The download is larger than NOVA's 1 GiB safety limit.".into());
+    let total=response.content_length();
+    if total.is_some_and(|size|size>MAX_ARCHIVE_BYTES as u64){return Err("The download is larger than NOVA's 1 GiB safety limit.".into());}
+    let mut stream=response.bytes_stream();
+    let mut bytes=Vec::new();
+    while let Some(chunk)=stream.next().await{
+        let chunk=chunk.map_err(|e|format!("Download stream failed: {e}"))?;
+        if bytes.len().saturating_add(chunk.len())>MAX_ARCHIVE_BYTES{return Err("The download is larger than NOVA's 1 GiB safety limit.".into());}
+        bytes.extend_from_slice(&chunk);
+        let completed=bytes.len() as u64;
+        let percent=total.filter(|size|*size>0).map(|size|((completed as f64/size as f64)*90.0).round() as u32);
+        let detail_text=if let Some(size)=total{format!("{detail}: {} / {} MB",completed/1_048_576,size/1_048_576)}else{format!("{detail}: {} MB downloaded",completed/1_048_576)};
+        let _=app.emit("nova-pack-progress",json!({"phase":phase,"completed":completed,"total":total,"percent":percent,"detail":detail_text}));
     }
-    let bytes=response.bytes().await.map_err(|e|format!("Could not read downloaded file: {e}"))?;
-    if bytes.len()>MAX_ARCHIVE_BYTES { return Err("The download is larger than NOVA's 1 GiB safety limit.".into()); }
-    Ok(bytes.to_vec())
+    Ok(bytes)
 }
 
-async fn download_pack_file(url: &str, destination: &Path, expected_size: Option<u64>, expected_sha1: Option<&str>) -> Result<(), String> {
-    let bytes=fetch_bytes(url).await?;
+async fn download_pack_file(app:&tauri::AppHandle,url:&str,destination:&Path,expected_size:Option<u64>,expected_sha1:Option<&str>,detail:&str)->Result<(),String>{
+    let bytes=fetch_bytes_with_progress(url,app,"files",detail).await?;
     verify_download(&bytes,expected_size,expected_sha1)?;
     write_atomic(destination,&bytes).map_err(|e|format!("Could not save a downloaded mod: {e}"))?;
     Ok(())
@@ -557,7 +565,7 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let archive_size=file["size"].as_u64();
     let archive_sha1=file["hashes"]["sha1"].as_str();
     emit_pack_progress(&app, "archive", 0, 0, "Downloading Modrinth archive");
-    let archive_bytes = fetch_bytes(download_url).await?;
+    let archive_bytes = fetch_bytes_with_progress(download_url,&app,"archive","Downloading Modrinth archive").await?;
     verify_download(&archive_bytes,archive_size,archive_sha1).map_err(|e|format!("Modrinth archive integrity check failed: {e}"))?;
     let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
         .map_err(|e| format!("The Modrinth pack is not a valid ZIP archive: {e}"))?;
@@ -591,7 +599,7 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
         let candidates=urls.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         if candidates.is_empty(){return Err("A Modrinth file has no usable download URL.".into());}
         let size=item["fileSize"].as_u64();let sha1=item["hashes"]["sha1"].as_str();let mut last_error=None;let mut downloaded=false;
-        for url in candidates {match download_pack_file(url,&folder.join(&relative),size,sha1).await{Ok(())=>{downloaded=true;break},Err(error)=>last_error=Some(error)}}
+        for url in candidates {match download_pack_file(&app,url,&folder.join(&relative),size,sha1,&format!("Downloading file {} of {}",i+1,pack_files.len())).await{Ok(())=>{downloaded=true;break},Err(error)=>last_error=Some(error)}}
         if !downloaded{return Err(format!("Mod file {} of {} failed on all available mirrors: {}",i+1,pack_files.len(),last_error.unwrap_or_else(||"No mirror was usable.".into())));}
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
@@ -678,7 +686,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     let archive_size=selected_file["fileLength"].as_u64();
     let archive_sha1=selected_file["hashes"].as_array().and_then(|hashes|hashes.iter().find(|h|h["algo"].as_u64()==Some(1))).and_then(|h|h["value"].as_str());
     emit_pack_progress(&app, "archive", 0, 0, "Downloading CurseForge archive");
-    let archive_bytes = fetch_bytes(&manifest_url).await?;
+    let archive_bytes = fetch_bytes_with_progress(&manifest_url,&app,"archive","Downloading CurseForge archive").await?;
     verify_download(&archive_bytes,archive_size,archive_sha1).map_err(|e|format!("CurseForge archive integrity check failed: {e}"))?;
     let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
         .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
@@ -716,7 +724,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         std::fs::create_dir_all(folder.join("mods")).map_err(|e|format!("Could not create mods folder: {e}"))?;
         let expected_size=item["fileLength"].as_u64();
         let expected_sha1=item["hashes"].as_array().and_then(|hashes|hashes.iter().find(|h|h["algo"].as_u64()==Some(1))).and_then(|h|h["value"].as_str());
-        download_pack_file(&url,&folder.join("mods").join(filename),expected_size,expected_sha1).await
+        download_pack_file(&app,&url,&folder.join("mods").join(filename),expected_size,expected_sha1,&format!("Downloading mod {} of {}",i+1,pack_files.len())).await
             .map_err(|e|format!("Could not verify or save CurseForge mod {}: {e}",i+1))?;
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
