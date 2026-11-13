@@ -9,6 +9,7 @@ use sha1::{Digest, Sha1};
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
+use std::process::Command;
 use std::fs::File;
 use std::time::{Duration, Instant, SystemTime};
 use std::sync::{Mutex, OnceLock};
@@ -28,6 +29,17 @@ static ACTIVE_INSTANCES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static ACTIVE_INSTALLS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static CANCELLED_INSTALLS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static AUTH_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+#[cfg(windows)]
+fn process_is_running(pid:u32)->bool{
+    let filter=format!("PID eq {pid}");
+    match Command::new("tasklist").args(["/FI",filter.as_str(),"/NH"]).output(){
+        Ok(output)=>String::from_utf8_lossy(&output.stdout).contains(&pid.to_string()),
+        Err(_)=>true
+    }
+}
+#[cfg(not(windows))]
+fn process_is_running(_pid:u32)->bool{false}
+
 fn active_instances() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTANCES.get_or_init(|| Mutex::new(HashSet::new())) }
 fn active_installs() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTALLS.get_or_init(|| Mutex::new(HashSet::new())) }
 fn cancelled_installs() -> &'static Mutex<HashSet<String>> { CANCELLED_INSTALLS.get_or_init(|| Mutex::new(HashSet::new())) }
@@ -467,6 +479,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         .map_err(|e| format!("Could not create the Minecraft game folder: {e}"))?;
 
     let process_key=instance_name.as_deref().map(safe_instance_name).transpose()?.unwrap_or_else(||format!("default-{version}"));
+    let running_marker=instance_name.as_deref().map(|name|instance_folder(name).map(|folder|folder.join(".nova-running.pid"))).transpose()?;
     let mut options = LaunchOptions::new(game_root, version);
     if let Some(name) = instance_name.as_deref() {
         options.instance = Some(safe_instance_name(name)?);
@@ -491,9 +504,17 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
     {let mut active=active_instances().lock().map_err(|_|"The game process registry is unavailable.".to_string())?;
      if !active.insert(process_key.clone()){return Err("This Minecraft instance is already running.".into());}}
     let mut child=match launch.run().await{Ok(child)=>child,Err(error)=>{if let Ok(mut active)=active_instances().lock(){active.remove(&process_key);}return Err(format!("Minecraft could not be installed or started: {error}"));}};
+    if let (Some(marker),Some(pid))=(&running_marker,child.id()){
+        if let Err(error)=std::fs::write(marker,pid.to_string()){
+            let _=child.kill().await;
+            if let Ok(mut active)=active_instances().lock(){active.remove(&process_key);}
+            return Err(format!("Could not track the running Minecraft process: {error}"));
+        }
+    }
     let process_app=app.clone();
     tokio::spawn(async move{
         let exit_code=child.wait().await.ok().and_then(|status|status.code());
+        if let Some(marker)=running_marker{let _=std::fs::remove_file(marker);}
         if let Ok(mut active)=active_instances().lock(){active.remove(&process_key);}
         let _=process_app.emit("nova-game-exit",json!({"instance":process_key,"exitCode":exit_code}));
     });
@@ -932,6 +953,13 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
         return Err("Close Minecraft before deleting this running instance.".into());
     }
     let folder=instance_folder(&key)?;
+    let running_marker=folder.join(".nova-running.pid");
+    if let Ok(contents)=std::fs::read_to_string(&running_marker){
+        if let Ok(pid)=contents.trim().parse::<u32>(){
+            if process_is_running(pid){return Err("Minecraft is still running for this instance. Close the game before deleting it.".into());}
+        }
+        let _=std::fs::remove_file(&running_marker);
+    }
     if folder.exists() {
         std::fs::remove_dir_all(&folder)
             .map_err(|e| format!("Could not delete instance files: {e}"))?;
