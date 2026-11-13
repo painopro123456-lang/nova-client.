@@ -3,6 +3,7 @@ package gg.nova.client;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.DeltaTracker;
+import net.minecraft.world.entity.EquipmentSlot;
 import java.time.LocalTime;
 import java.time.format.DateTimeFormatter;
 
@@ -50,14 +51,16 @@ public final class NovaHud {
         if (NovaModules.enabled("Armor Status")) {
             int x = 8;
             int y = 172;
-            String[] slots = {"HELM", "CHEST", "LEGS", "BOOTS"};
-            var armor = client.player.getInventory().armor;
-            for (int i = armor.size() - 1; i >= 0; i--) {
-                var stack = armor.get(i);
-                String value = slots[3 - i] + "  —";
-                if (!stack.isEmpty()) {
+            EquipmentSlot[] slots = {EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET};
+            String[] labels = {"HELM", "CHEST", "LEGS", "BOOTS"};
+            for (int i = 0; i < slots.length; i++) {
+                var stack = client.player.getItemBySlot(slots[i]);
+                String value = labels[i] + "  —";
+                if (!stack.isEmpty() && stack.isDamageableItem()) {
                     int remaining = Math.max(0, stack.getMaxDamage() - stack.getDamageValue());
-                    value = slots[3 - i] + "  " + remaining;
+                    value = labels[i] + "  " + remaining;
+                } else if (!stack.isEmpty()) {
+                    value = labels[i] + "  ✓";
                 }
                 drawPanel(graphics, x, y, value, TEXT);
                 y += 24;
