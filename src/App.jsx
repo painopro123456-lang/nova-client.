@@ -217,7 +217,7 @@ function Catalog({ packs, active, memoryMb }) {
         <div className="eyebrow">NOVA / MODPACK INSTALLER</div>
         <h3 id="install-progress-title">{installDialog.done?(installDialog.error?"Installation stopped":"You're all set"):"Installing your modpack"}</h3>
         <p className="install-progress-name">{installDialog.name}</p>
-        <div className="install-progress-track"><div className={"install-progress-fill"+(!installDialog.done?" is-active":"")} style={{width:(typeof installDialog.progress==="number"?installDialog.progress:100)+"%"}}/></div>
+        <div className="install-progress-track"><div className={"install-progress-fill"+(!installDialog.done?" is-active":"")} style={{width:(installDialog.done?100:(typeof installDialog.progress==="number"?installDialog.progress:32))+"%"}}/></div>
         <div className="install-progress-percent">{typeof installDialog.progress==="number"?installDialog.progress+"%":"Working…"}</div>
         <div className="install-progress-status"><span className={installDialog.done?(installDialog.error?"progress-failed":"progress-complete"):"progress-running"}>{installDialog.done?(installDialog.error?"!":"✓"):""}</span><b>{installDialog.status}</b></div>
         <p className="install-progress-detail">{installDialog.detail}</p>
