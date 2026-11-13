@@ -545,14 +545,36 @@ async fn install_curseforge_modpack(mod_id: String, instance_name: String, file_
     let mut headers = HeaderMap::new();
     headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
     headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
-    let files: Value = client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files"))
-        .headers(headers.clone()).query(&[("pageSize","50"),("index","0")])
-        .send().await.map_err(|e| format!("Could not reach CurseForge: {e}"))?
-        .error_for_status().map_err(|e| format!("CurseForge could not list pack files: {e}"))?
-        .json().await.map_err(|e| format!("CurseForge returned an unreadable file list: {e}"))?;
-    let file_list = files["data"].as_array().ok_or("CurseForge returned an invalid file list.")?;
-    let latest = if let Some(requested) = file_id { file_list.iter().find(|f| f["id"].as_u64() == Some(requested)).ok_or("The selected CurseForge modpack version is no longer available.")? } else { file_list.first().ok_or("CurseForge has no downloadable files for this modpack.")? };
-    let file_id = latest["id"].as_u64().ok_or("CurseForge file ID is missing.")?;
+    // The version picker can show releases from up to 1,000 files. Search the
+    // same paginated history here so selecting an older release actually works.
+    let mut selected_file: Option<Value> = None;
+    for page in 0..20u32 {
+        let files: Value = client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files"))
+            .headers(headers.clone())
+            .query(&[("pageSize","50"),("index",&(page * 50).to_string())])
+            .send().await.map_err(|e| format!("Could not reach CurseForge: {e}"))?
+            .error_for_status().map_err(|e| format!("CurseForge could not list pack files: {e}"))?
+            .json().await.map_err(|e| format!("CurseForge returned an unreadable file list: {e}"))?;
+        let file_list = files["data"].as_array().ok_or("CurseForge returned an invalid file list.")?;
+        if let Some(requested) = file_id {
+            if let Some(found) = file_list.iter().find(|f| f["id"].as_u64() == Some(requested)) {
+                selected_file = Some(found.clone());
+                break;
+            }
+        } else if page == 0 {
+            selected_file = file_list.first().cloned();
+            break;
+        }
+        if file_list.len() < 50 { break; }
+    }
+    let selected_file = selected_file.ok_or_else(|| {
+        if file_id.is_some() {
+            "The selected CurseForge modpack version is no longer available in the version history.".to_string()
+        } else {
+            "CurseForge has no downloadable files for this modpack.".to_string()
+        }
+    })?;
+    let file_id = selected_file["id"].as_u64().ok_or("CurseForge file ID is missing.")?;
     let manifest_url: String = client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}/download-url"))
         .headers(headers.clone()).send().await.map_err(|e| format!("Could not request the CurseForge pack download: {e}"))?
         .error_for_status().map_err(|e| format!("CurseForge did not provide a download URL: {e}"))?
