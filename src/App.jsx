@@ -78,9 +78,12 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
 
   useEffect(()=>{
     if(!active) return;
+    // Clear stale cards immediately when the search, source, or page changes.
+    // Otherwise old results remain clickable during the debounce window while
+    // the selected provider has already changed.
+    setBusy(true); setError(""); setHits([]); setHasNext(false);
     const ctrl=new AbortController();
     const timer=setTimeout(async()=>{
-      setBusy(true); setError(""); setHits([]);
       try {
         let results=[];
         let moreAvailable=false;
