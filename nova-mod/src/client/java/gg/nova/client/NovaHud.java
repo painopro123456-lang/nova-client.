@@ -50,7 +50,7 @@ public final class NovaHud {
             String right=client.options.keyRight.isDown()?"D":"d";
             line(graphics,client,"Keystrokes","[ "+up+" ]",8,36);
             line(graphics,client,"Keystrokes","["+left+"] ["+down+"] ["+right+"]",8,54);
-            line(graphics,client,"Keystrokes","[SPACE]",8,72);
+            line(graphics,client,"Keystrokes",client.options.keyJump.isDown()?"[ SPACE ]":"[ space ]",8,72);
         }
         if(NovaMenuScreen.isEnabled("Armor Status")) {
             List<ItemStack> armor=client.player.getInventory().armor;
