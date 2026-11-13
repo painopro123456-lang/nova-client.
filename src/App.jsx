@@ -183,6 +183,7 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
     }finally{setInstallingId("");}
   };
   const launchPack=async metadata=>{
+    if(!signedIn){setPackActionMessage("Your modpack files are downloaded. Sign in with Microsoft when you are ready to install Minecraft and play.");return;}
     setInstallingId(String(metadata.projectId));setPackActionMessage(`Preparing ${metadata.name}…`);
     try{
       await invoke("launch_minecraft",{version:metadata.minecraftVersion,loader:metadata.loader,loaderBuild:metadata.loaderVersion,instanceName:metadata.instanceName,memoryMb});
