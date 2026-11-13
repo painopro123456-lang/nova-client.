@@ -4,7 +4,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
-  Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box,
+  Activity, ArrowDownToLine, ArrowUpRight, Bell, Blocks, Box, CheckCircle2,
   ChevronDown, CircleHelp, Compass, Cpu, Gamepad2, Gauge, HardDrive,
   Layers3, LayoutDashboard, Monitor, Moon, MoreHorizontal, Play, Plus,
   Search, Settings, ShieldCheck, SlidersHorizontal, Sparkles, Users,
@@ -121,10 +121,10 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
         const response=await fetch("https://api.modrinth.com/v2/project/"+encodeURIComponent(project.id)+"/version");
         if(!response.ok)throw new Error("Could not load versions from Modrinth.");
         const data=await response.json();
-        versions=(data||[]).map(v=>({id:v.id,label:(v.name||v.version_number||v.id)+" · MC "+(v.game_versions||[]).join(", ")+" · "+(v.loaders||[]).join("/"),published:v.date_published||""}));
+        versions=(data||[]).map(v=>({id:v.id,name:v.name||v.version_number||"Version",versionNumber:v.version_number||"",gameVersions:v.game_versions||[],loaders:v.loaders||[],releaseType:v.version_type||"release",published:v.date_published||""}));
       }else{
         const data=await invoke("curseforge_modpack_versions",{modId:String(project.id)});
-        versions=(data||[]).map(v=>({id:String(v.id),label:(v.displayName||v.fileName||("File "+v.id))+" · MC "+((v.gameVersions||[]).join(", ")||"version not listed"),published:v.fileDate||""}));
+        versions=(data||[]).map(v=>({id:String(v.id),name:v.displayName||v.fileName||("File "+v.id),versionNumber:v.fileName||"",gameVersions:v.gameVersions||[],loaders:[],releaseType:"release",published:v.fileDate||""}));
       }
       if(!versions.length)throw new Error("This project has no downloadable versions.");
       setPackVersions(versions);setSelectedPackVersion(versions[0].id);
@@ -224,13 +224,22 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
       <div className="pack-install-row">{packs&&installed[provider+":"+String(x.id)]
         ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":signedIn?"Install & Play":"Downloaded · Sign in to play"}</button>
-        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :packs?"Choose version":"Install to instance"}</button>}</div>
+        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :packs?"Install Modpack":"Install to instance"}</button>}</div>
     </article>)}</div>}
     {versionProject&&<div className="pack-version-backdrop" role="presentation" onClick={()=>!packVersionsBusy&&setVersionProject(null)}>
-      <section className="pack-version-dialog" role="dialog" aria-modal="true" aria-labelledby="pack-version-title" onClick={e=>e.stopPropagation()}>
-        <div className="eyebrow">{packs?"MODPACK INSTALLER":"MOD INSTALLER"}</div><h3 id="pack-version-title">Choose a version</h3><p>{packs?"Select the exact modpack release you want NOVA to install. The Minecraft version and mod loader are included in each option.":"Choose the instance and exact mod release. NOVA checks Minecraft and loader compatibility before saving the JAR."}</p>
-        {packVersionsBusy?<div className="catalog-state compact"><div className="loading-orbit"/><span>Loading available versions…</span></div>
-          : <>{!packs&&<><label className="pack-version-label" htmlFor="target-instance-select">INSTALL INTO INSTANCE</label><select id="target-instance-select" className="pack-version-select" value={selectedTargetInstance} onChange={e=>setSelectedTargetInstance(e.target.value)}>{targetInstances.map(v=><option key={v.instanceName} value={v.instanceName}>{v.name||v.instanceName} · {v.minecraftVersion} · {v.loader}</option>)}</select></>}<label className="pack-version-label" htmlFor="pack-version-select">{packs?"MODPACK VERSION":"MOD VERSION"}</label><select id="pack-version-select" className="pack-version-select" value={selectedPackVersion} onChange={e=>setSelectedPackVersion(e.target.value)}>{packVersions.map(v=><option key={v.id} value={v.id}>{v.label}</option>)}</select><div className="pack-version-meta">{packVersions.find(v=>v.id===selectedPackVersion)?.published ? "Published "+new Date(packVersions.find(v=>v.id===selectedPackVersion).published).toLocaleDateString() : "Latest versions are listed first"}</div><div className="pack-version-actions"><button className="secondary-btn" onClick={()=>setVersionProject(null)}>Cancel</button><button className="primary-btn" onClick={installPack} disabled={!selectedPackVersion||(!packs&&!selectedTargetInstance)}><ArrowDownToLine size={14}/> {packs?"Install selected version":"Install mod"}</button></div></>}
+      <section className={"pack-version-dialog"+(packs?" modpack-version-dialog":"")} role="dialog" aria-modal="true" aria-labelledby="pack-version-title" onClick={e=>e.stopPropagation()}>
+        <div className="pack-version-dialog-top"><div><div className="eyebrow">{packs?"NOVA MODPACK INSTALLER":"NOVA MOD INSTALLER"}</div><h3 id="pack-version-title">{packs?"Choose your modpack version":"Choose a mod version"}</h3><p>{versionProject.title} · {provider==="modrinth"?"Modrinth":"CurseForge"}</p></div><button className="pack-version-close" onClick={()=>setVersionProject(null)} aria-label="Close version picker"><X size={17}/></button></div>
+        {packVersionsBusy?<div className="catalog-state compact"><div className="loading-orbit"/><span>Finding available releases…</span></div>
+          : <>{!packs&&<div className="pack-version-target"><label className="pack-version-label" htmlFor="target-instance-select">INSTALL INTO INSTANCE</label><select id="target-instance-select" className="pack-version-select" value={selectedTargetInstance} onChange={e=>setSelectedTargetInstance(e.target.value)}>{targetInstances.map(v=><option key={v.instanceName} value={v.instanceName}>{v.name||v.instanceName} · {v.minecraftVersion} · {v.loader}</option>)}</select></div>}
+          <div className="pack-version-list-heading"><span>{packs?"AVAILABLE MODPACK RELEASES":"AVAILABLE MOD RELEASES"}</span><span>{packVersions.length} VERSION{packVersions.length===1?"":"S"}</span></div>
+          <div className="pack-version-list" role="listbox" aria-label={packs?"Available modpack versions":"Available mod versions"}>
+            {packVersions.map((v,index)=><button type="button" role="option" aria-selected={selectedPackVersion===v.id} className={"pack-version-option"+(selectedPackVersion===v.id?" selected":"")} key={v.id} onClick={()=>setSelectedPackVersion(v.id)}>
+              <span className="pack-version-radio">{selectedPackVersion===v.id&&<CheckCircle2 size={17}/>}</span>
+              <span className="pack-version-option-main"><b>{v.name}</b><span className="pack-version-option-sub">{v.versionNumber&&v.versionNumber!==v.name?v.versionNumber:"Release "+(packVersions.length-index)}</span><span className="pack-version-chips">{(v.gameVersions||[]).slice(0,4).map(game=><i key={game}>MC {game}</i>)}{(v.loaders||[]).slice(0,3).map(loader=><i key={loader}>{loader}</i>)}{!(v.gameVersions||[]).length&&<i>Game version not listed</i>}</span></span>
+              <span className="pack-version-option-date">{v.published?new Date(v.published).toLocaleDateString():"Release"}</span>
+            </button>)}
+          </div>
+          <div className="pack-version-actions"><button className="secondary-btn" onClick={()=>setVersionProject(null)}>Cancel</button><button className="primary-btn" onClick={installPack} disabled={!selectedPackVersion||(!packs&&!selectedTargetInstance)}><ArrowDownToLine size={14}/>{packs?"Install Modpack":"Install Mod"}</button></div></>}
       </section>
     </div>}
     <div className="catalog-pagination"><button className="secondary-btn" disabled={page===0||busy} onClick={()=>setPage(p=>Math.max(0,p-1))}>← Previous</button><span>{String(page+1).padStart(2,"0")} <i/> {provider==="modrinth"?"DISCOVER":"CURSEFORGE"}</span><button className="secondary-btn" disabled={busy||!hasNext} onClick={()=>setPage(p=>p+1)}>Next →</button></div>
