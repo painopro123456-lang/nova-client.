@@ -289,17 +289,27 @@ export default function App() {
       .finally(() => { if (alive) setVersionsLoading(false); });
     let offLink;
     let offComplete;
+    let offGameExit;
     (async () => {
       const stopLink = await listen("nova-login-link", event => { if (alive) { setLoginUrl(event.payload); setMessage("Microsoft sign-in opened in your browser. Complete the sign-in there. If it did not open, use the link below."); } });
       if (alive) offLink = stopLink; else stopLink();
       const stopComplete = await listen("nova-login-complete", event => { if (alive) { setSignedIn(true); setAccountName(event.payload); setLoginUrl(""); setMessage("Microsoft account connected."); } });
       if (alive) offComplete = stopComplete; else stopComplete();
+      const stopGameExit = await listen("nova-game-exit", event => {
+        if (alive) {
+          const result = event.payload || {};
+          setMessage(result.success
+            ? "Minecraft has closed."
+            : "Minecraft exited unexpectedly. Check the game log for the crash details.");
+        }
+      });
+      if (alive) offGameExit = stopGameExit; else stopGameExit();
       try {
         const name = await invoke("minecraft_account_name");
         if (alive && name) { setSignedIn(true); setAccountName(name); }
       } catch (error) { if (alive) setMessage(String(error)); }
     })();
-    return () => { alive = false; offLink?.(); offComplete?.(); };
+    return () => { alive = false; offLink?.(); offComplete?.(); offGameExit?.(); };
   }, []);
   const handleLogin = async () => {
     setLoginBusy(true); setLoginUrl(""); setMessage("Requesting a Microsoft sign-in session…");
