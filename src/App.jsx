@@ -98,6 +98,20 @@ function Catalog({ packs }) {
   },[q,packs,provider,page]);
 
   useEffect(()=>{localStorage.setItem("nova.installedPacks",JSON.stringify(installed));},[installed]);
+  useEffect(()=>{
+    let alive=true;
+    let unlisten;
+    listen("nova-pack-progress",event=>{
+      const progress=event.payload||{};
+      setInstallDialog(current=>current?{
+        ...current,
+        progress:typeof progress.percent==="number"?progress.percent:null,
+        status:progress.phase==="preparing"?"Preparing Minecraft":progress.phase==="archive"?"Downloading modpack archive":"Downloading modpack files",
+        detail:progress.detail||current.detail
+      }:current);
+    }).then(stop=>{if(alive)unlisten=stop;else stop();});
+    return()=>{alive=false;unlisten?.();};
+  },[]);
 
   const choosePackVersion=async(project)=>{
     setVersionProject(project);setPackVersions([]);setSelectedPackVersion("");setPackVersionsBusy(true);setPackActionMessage("");
@@ -126,13 +140,13 @@ function Catalog({ packs }) {
     const instanceName=(project.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,24)||"modpack")+"-"+Date.now().toString(36)+"-"+uniqueSuffix;
     setInstallingId(projectId);
     setVersionProject(null);
-    setInstallDialog({name:project.title,step:0,progress:8,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""});
+    setInstallDialog({name:project.title,step:0,progress:null,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""});
     try{
-      setInstallDialog({name:project.title,step:0,progress:12,status:"Downloading modpack",detail:"Getting the selected release and its manifest…",done:false,error:""});
+      setInstallDialog({name:project.title,step:0,progress:null,status:"Downloading modpack",detail:"Getting the selected release and its manifest…",done:false,error:""});
       const metadata=provider==="modrinth"
         ? await invoke("install_modrinth_modpack",{projectId,instanceName,versionId:selectedPackVersion})
         : await invoke("install_curseforge_modpack",{modId:projectId,instanceName,fileId:Number(selectedPackVersion)});
-      setInstallDialog({name:metadata.name||project.title,step:1,progress:48,status:"Mod files downloaded",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""});
+      setInstallDialog({name:metadata.name||project.title,step:1,progress:null,status:"Preparing Minecraft",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""});
       await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName});
       // Only expose a pack as installed after Minecraft and its loader are ready.
       // Remove the previous isolated install only after the replacement is ready.
@@ -145,7 +159,8 @@ function Catalog({ packs }) {
       setPackActionMessage((metadata.name||project.title)+" is fully installed and ready to play.");
     }catch(e){
       const reason=typeof e==="string"?e:(e.message||"Modpack installation failed.");
-      setInstallDialog(current=>({...current,done:true,error:reason,status:"Installation failed",detail:"Your downloaded pack files are kept if they were already saved."}));
+      try{await invoke("delete_instance",{instanceName});}catch{/* Ignore cleanup errors; show the original installation failure. */}
+      setInstallDialog(current=>({...current,done:true,error:reason,status:"Installation failed",detail:"The incomplete instance was cleaned up where possible. You can safely retry."}));
       setPackActionMessage((project.title)+" installation failed: "+reason);
     }finally{setInstallingId("");}
   };
@@ -197,8 +212,8 @@ function Catalog({ packs }) {
         <div className="eyebrow">NOVA / MODPACK INSTALLER</div>
         <h3 id="install-progress-title">{installDialog.done?(installDialog.error?"Installation stopped":"You're all set"):"Installing your modpack"}</h3>
         <p className="install-progress-name">{installDialog.name}</p>
-        <div className="install-progress-track"><div className={"install-progress-fill"+(!installDialog.done?" is-active":"")} style={{width:installDialog.progress+"%"}}/></div>
-        <div className="install-progress-percent">{installDialog.progress}%</div>
+        <div className="install-progress-track"><div className={"install-progress-fill"+(!installDialog.done?" is-active":"")} style={{width:(typeof installDialog.progress==="number"?installDialog.progress:100)+"%"}}/></div>
+        <div className="install-progress-percent">{typeof installDialog.progress==="number"?installDialog.progress+"%":"Working…"}</div>
         <div className="install-progress-status"><span className={installDialog.done?(installDialog.error?"progress-failed":"progress-complete"):"progress-running"}>{installDialog.done?(installDialog.error?"!":"✓"):""}</span><b>{installDialog.status}</b></div>
         <p className="install-progress-detail">{installDialog.detail}</p>
         <div className="install-progress-steps">
