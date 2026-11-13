@@ -670,11 +670,25 @@ async fn install_mod_to_instance(
     let name = safe_instance_name(&instance_name)?;
     let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
     {
-        let running = active.lock().map_err(|_| "Could not inspect active Minecraft launches.")?;
-        if running.contains(&name) {
-            return Err("Close Minecraft before installing mods into this instance.".into());
+        let mut operations = active.lock().map_err(|_| "Could not inspect active Minecraft operations.")?;
+        if !operations.insert(name.clone()) {
+            return Err("This instance is running or another operation is already using it. Close Minecraft and try again.".into());
         }
     }
+    let result = install_mod_to_instance_inner(app, provider, project_id, version_id, name.clone()).await;
+    if let Ok(mut operations) = active.lock() {
+        operations.remove(&name);
+    }
+    result
+}
+
+async fn install_mod_to_instance_inner(
+    app: tauri::AppHandle,
+    provider: String,
+    project_id: String,
+    version_id: String,
+    name: String,
+) -> Result<Value, String> {
     if project_id.is_empty() || !project_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("The selected mod project ID is invalid.".into());
     }
@@ -790,22 +804,16 @@ async fn install_mod_to_instance(
         let _ = std::fs::remove_file(&staging);
         return Err(error);
     }
-    // Keep the final rename synchronized with launch registration, so a new game
-    // process cannot begin loading this instance between the check and commit.
-    let running = active.lock().map_err(|_| "Could not inspect active Minecraft launches.")?;
-    if running.contains(&name) {
-        let _ = std::fs::remove_file(&staging);
-        return Err("Minecraft started while the mod was downloading. Close it and try again.".into());
-    }
+    // The outer command reserves this instance for the whole download, preventing
+    // launch or deletion until the validated JAR has been committed.
     if destination.exists() {
         let _ = std::fs::remove_file(&staging);
-        return Err(format!("A mod named '{safe_filename}' was installed while this download was running."));
+        return Err(format!("A mod named '{safe_filename}' is already installed in this instance."));
     }
     std::fs::rename(&staging, &destination).map_err(|e| {
         let _ = std::fs::remove_file(&staging);
         format!("Could not install downloaded mod: {e}")
     })?;
-    drop(running);
     Ok(json!({"name":mod_title,"fileName":safe_filename,"instanceName":name,"minecraftVersion":minecraft_version,"loader":loader}))
 }
 
@@ -1089,14 +1097,18 @@ fn list_instances() -> Result<Vec<Value>, String> {
 fn delete_instance(instance_name: String) -> Result<(), String> {
     let name = safe_instance_name(&instance_name)?;
     let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
-    if active.lock().map_err(|_| "Could not inspect running Minecraft processes.")?.contains(&name) {
-        return Err("This instance is currently running. Close Minecraft before deleting it.".into());
+    // Hold the operation lock through deletion so launch/install cannot start
+    // after the running check but before the directory is removed.
+    let operations = active.lock().map_err(|_| "Could not inspect running Minecraft processes.")?;
+    if operations.contains(&name) {
+        return Err("This instance is currently running or being modified. Close Minecraft and try again.".into());
     }
     let folder = instance_folder(&name)?;
     if folder.exists() {
         std::fs::remove_dir_all(&folder)
             .map_err(|e| format!("Could not delete instance files: {e}"))?;
     }
+    drop(operations);
     Ok(())
 }
 
