@@ -779,7 +779,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
     std::fs::create_dir_all(&game_root)
         .map_err(|e| format!("Could not create the Minecraft game folder: {e}"))?;
 
-    let mut options = LaunchOptions::new(game_root, version.clone());
+    let mut options = LaunchOptions::new(game_root.clone(), version.clone());
     options.instance = Some(name.clone());
     match loader.as_str() {
         "vanilla" => {}
