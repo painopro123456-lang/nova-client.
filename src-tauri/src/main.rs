@@ -666,6 +666,13 @@ async fn install_mod_to_instance(
     instance_name: String,
 ) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    {
+        let running = active.lock().map_err(|_| "Could not inspect active Minecraft launches.")?;
+        if running.contains(&name) {
+            return Err("Close Minecraft before installing mods into this instance.".into());
+        }
+    }
     if project_id.is_empty() || !project_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("The selected mod project ID is invalid.".into());
     }
@@ -758,6 +765,9 @@ async fn install_mod_to_instance(
     if !download_url.starts_with("https://") {
         return Err("The mod source supplied a non-HTTPS download URL; it was blocked.".into());
     }
+    if filename.contains('/') || filename.contains('\\\\') {
+        return Err("The selected mod filename contains an invalid path.".into());
+    }
     let safe_filename = Path::new(&filename).file_name().and_then(|s| s.to_str())
         .filter(|s| !s.is_empty() && s.to_ascii_lowercase().ends_with(".jar"))
         .ok_or("The selected mod file is not a valid JAR filename.")?;
@@ -767,8 +777,33 @@ async fn install_mod_to_instance(
     if destination.exists() {
         return Err(format!("A mod named '{safe_filename}' is already installed in this instance."));
     }
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let staging = mods_folder.join(format!(".{safe_filename}.{}.{}.installing", std::process::id(), sequence));
     emit_pack_progress(&app, "files", 0, 0, "Downloading selected mod");
-    download_pack_file(&app, &download_url, &destination, expected_size, expected_sha1.as_deref()).await?;
+    download_pack_file(&app, &download_url, &staging, expected_size, expected_sha1.as_deref()).await?;
+    let jar_check = std::fs::File::open(&staging)
+        .map_err(|e| format!("Could not verify downloaded mod archive: {e}"))
+        .and_then(|file| ZipArchive::new(file).map(|_| ()).map_err(|e| format!("The downloaded file is not a valid JAR archive: {e}")));
+    if let Err(error) = jar_check {
+        let _ = std::fs::remove_file(&staging);
+        return Err(error);
+    }
+    // Keep the final rename synchronized with launch registration, so a new game
+    // process cannot begin loading this instance between the check and commit.
+    let running = active.lock().map_err(|_| "Could not inspect active Minecraft launches.")?;
+    if running.contains(&name) {
+        let _ = std::fs::remove_file(&staging);
+        return Err("Minecraft started while the mod was downloading. Close it and try again.".into());
+    }
+    if destination.exists() {
+        let _ = std::fs::remove_file(&staging);
+        return Err(format!("A mod named '{safe_filename}' was installed while this download was running."));
+    }
+    std::fs::rename(&staging, &destination).map_err(|e| {
+        let _ = std::fs::remove_file(&staging);
+        format!("Could not install downloaded mod: {e}")
+    })?;
+    drop(running);
     Ok(json!({"name":mod_title,"fileName":safe_filename,"instanceName":name,"minecraftVersion":minecraft_version,"loader":loader}))
 }
 
