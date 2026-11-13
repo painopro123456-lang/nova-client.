@@ -498,7 +498,7 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-async fn download_pack_file(url: &str, destination: &Path, expected_size: Option<u64>, expected_sha1: Option<&str>) -> Result<(), String> {
+async fn download_pack_file(app: &tauri::AppHandle, url: &str, destination: &Path, expected_size: Option<u64>, expected_sha1: Option<&str>) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());
     }
@@ -508,6 +508,7 @@ async fn download_pack_file(url: &str, destination: &Path, expected_size: Option
     let response = http_client()?.get(url).send().await
         .map_err(|e| format!("Mod download failed: {e}"))?
         .error_for_status().map_err(|e| format!("Mod download server returned an error: {e}"))?;
+    let expected_total = response.content_length().or(expected_size);
     if response.content_length().is_some_and(|size| size > MAX_ARCHIVE_FILE_BYTES) {
         return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
     }
@@ -524,6 +525,7 @@ async fn download_pack_file(url: &str, destination: &Path, expected_size: Option
         let mut response = response;
         let mut hasher = Sha1::new();
         let mut downloaded = 0u64;
+        let mut last_progress = 0u64;
         while let Some(chunk) = response.chunk().await
             .map_err(|e| format!("Could not read mod download: {e}"))? {
             downloaded = downloaded.checked_add(chunk.len() as u64)
@@ -537,6 +539,15 @@ async fn download_pack_file(url: &str, destination: &Path, expected_size: Option
             hasher.update(&chunk);
             file.write_all(&chunk).await
                 .map_err(|e| format!("Could not write temporary mod download: {e}"))?;
+            if downloaded.saturating_sub(last_progress) >= 1024 * 1024 {
+                let detail = if let Some(total) = expected_total {
+                    format!("Downloading mod file: {:.1} / {:.1} MB", downloaded as f64 / 1_048_576.0, total as f64 / 1_048_576.0)
+                } else {
+                    format!("Downloading mod file: {:.1} MB", downloaded as f64 / 1_048_576.0)
+                };
+                emit_pack_progress(app, "files", 0, 0, &detail);
+                last_progress = downloaded;
+            }
         }
         file.flush().await.map_err(|e| format!("Could not flush mod download: {e}"))?;
         drop(file);
@@ -636,7 +647,7 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
         let mut last_error = None;
         let mut downloaded = false;
         for candidate in urls.iter().filter_map(Value::as_str) {
-            match download_pack_file(candidate, &folder.join(relative.clone()), size, sha1).await {
+            match download_pack_file(&app, candidate, &folder.join(relative.clone()), size, sha1).await {
                 Ok(()) => { downloaded = true; break; }
                 Err(error) => last_error = Some(error),
             }
@@ -761,7 +772,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         let filename = format!("{project}-{file}.jar");
         let mods_folder = folder.join("mods");
         std::fs::create_dir_all(&mods_folder).map_err(|e| format!("Could not create mods folder: {e}"))?;
-        download_pack_file(&url, &mods_folder.join(filename), None, None).await
+        download_pack_file(&app, &url, &mods_folder.join(filename), None, None).await
             .map_err(|e| format!("Could not save CurseForge mod {}: {e}", i+1))?;
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
