@@ -125,8 +125,17 @@ function Catalog({ packs }) {
       const metadata=provider==="modrinth"
         ? await invoke("install_modrinth_modpack",{projectId:key,instanceName,versionId:selectedPackVersion})
         : await invoke("install_curseforge_modpack",{modId:key,instanceName,fileId:Number(selectedPackVersion)});
+      // Keep the downloaded pack visible even if the base-game setup needs a retry.
       setInstalled(old=>({...old,[key]:metadata}));
-      setPackActionMessage((metadata.name||project.title)+" installed · Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+".");
+      setPackActionMessage("Mod files downloaded. Now installing Minecraft, Java and "+metadata.loader+" for "+(metadata.name||project.title)+"…");
+      try{
+        const ready=await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName});
+        if(!ready?.ready)throw new Error("NOVA did not confirm that the instance is ready.");
+        setPackActionMessage((metadata.name||project.title)+" is fully installed · Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+". Ready to play.");
+      }catch(prepareError){
+        const reason=typeof prepareError==="string"?prepareError:(prepareError.message||"Minecraft setup failed.");
+        setPackActionMessage((metadata.name||project.title)+" mod files are saved, but Minecraft setup did not finish: "+reason+" You can retry with Install & Play.");
+      }
     }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Modpack installation failed."));}
     finally{setInstallingId("");}
   };
