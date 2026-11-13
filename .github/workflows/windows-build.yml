@@ -12,6 +12,10 @@ on:
       - "vite.config.js"
       - ".github/workflows/windows-build.yml"
 
+concurrency:
+  group: nova-windows-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
 
