@@ -17,7 +17,7 @@ public final class NovaMenuScreen extends Screen {
         modules.put("Crosshair",false); modules.put("Clock",false);
     }
     @Override protected void init() { rebuildWidgets(); }
-    private void rebuildWidgets() {
+    @Override protected void rebuildWidgets() {
         clearWidgets();
         int pw=Math.min(760,width-40), ph=Math.min(480,height-40), l=(width-pw)/2, t=(height-ph)/2;
         String[] cats={"All","HUD","Visual","Player","Mods"};
