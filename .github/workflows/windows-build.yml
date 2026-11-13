@@ -9,6 +9,7 @@ on:
       - "src/**"
       - "src-tauri/**"
       - "package.json"
+      - "package-lock.json"
       - "index.html"
       - "vite.config.js"
       - ".github/workflows/windows-build.yml"
