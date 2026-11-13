@@ -80,14 +80,14 @@ fn get_game_logs(instance_name: Option<String>) -> Result<Value, String> {
         } else {
             let expected = candidates[0].display().to_string();
             minecraft_sections.push(format!(
-                "No Minecraft log exists for this instance yet. Launch this modpack once, then open Logs again.\\nExpected file: {expected}"
+                "No Minecraft log exists for this instance yet. Launch this modpack once, then open Logs again.\nExpected file: {expected}"
             ));
             minecraft_paths.push(expected);
         }
     } else {
         let default_log = root.join("logs").join("latest.log");
         if default_log.exists() {
-            minecraft_sections.push(format!("=== Default Minecraft ===\\n{}", tail_file(&default_log, 350)));
+            minecraft_sections.push(format!("=== Default Minecraft ===\n{}", tail_file(&default_log, 350)));
             minecraft_paths.push(default_log.display().to_string());
         }
         let instances_dir = root.join("instances");
@@ -96,7 +96,7 @@ fn get_game_logs(instance_name: Option<String>) -> Result<Value, String> {
                 if !entry.file_type().is_ok_and(|kind| kind.is_dir()) { continue; }
                 let path = entry.path().join("logs").join("latest.log");
                 if path.is_file() {
-                    minecraft_sections.push(format!("=== Instance {} ===\\n{}", entry.file_name().to_string_lossy(), tail_file(&path, 350)));
+                    minecraft_sections.push(format!("=== Instance {} ===\n{}", entry.file_name().to_string_lossy(), tail_file(&path, 350)));
                     minecraft_paths.push(path.display().to_string());
                 }
             }
@@ -107,7 +107,7 @@ fn get_game_logs(instance_name: Option<String>) -> Result<Value, String> {
     }
     Ok(json!({
         "launcherLog": tail_file(&game_log_path(), 300),
-        "minecraftLog": minecraft_sections.join("\\n\\n"),
+        "minecraftLog": minecraft_sections.join("\n\n"),
         "launcherLogPath": game_log_path().display().to_string(),
         "minecraftLogPath": if minecraft_paths.is_empty() { "Minecraft logs\\\\latest.log".to_owned() } else { minecraft_paths.join(" | ") }
     }))
