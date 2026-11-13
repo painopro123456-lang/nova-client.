@@ -1128,14 +1128,8 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         if item["required"].as_bool() == Some(false) { continue; }
         let project = item["projectID"].as_u64().ok_or("CurseForge project ID is missing.")?;
         let file = item["fileID"].as_u64().ok_or("CurseForge file ID is missing.")?;
-        let url: String = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}/download-url"))
-            .headers(headers.clone()).send().await.map_err(|e| format!("Could not resolve CurseForge mod {}: {e}", i+1))?
-            .error_for_status().map_err(|e| format!("CurseForge could not provide mod {}: {e}", i+1))?
-            .json::<Value>().await.map_err(|e| format!("CurseForge mod {} response was unreadable: {e}", i+1))?["data"]
-            .as_str().ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}. The author may have disabled third-party downloads."))?.to_owned();
-        let filename = format!("{project}-{file}.jar");
-        let mods_folder = folder.join("mods");
-        std::fs::create_dir_all(&mods_folder).map_err(|e| format!("Could not create mods folder: {e}"))?;
+        // Read file metadata first: CurseForge may include a direct downloadUrl.
+        // Prefer it, and only call the download-url endpoint when it is absent.
         let mod_details: Value = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}"))
             .headers(headers.clone()).send().await
             .map_err(|e| format!("Could not verify CurseForge mod {}: {e}", i+1))?
@@ -1145,6 +1139,28 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         if details["modId"].as_u64() != Some(project) || details["id"].as_u64() != Some(file) {
             return Err(format!("CurseForge returned mismatched metadata for mod {project}/{file}."));
         }
+        let url: String = if let Some(direct_url) = details["downloadUrl"].as_str().filter(|url| url.starts_with("https://")) {
+            direct_url.to_owned()
+        } else {
+            let response = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}/download-url"))
+                .headers(headers.clone()).send().await
+                .map_err(|e| format!("Could not resolve CurseForge mod {}: {e}", i+1))?;
+            let status = response.status();
+            if status == reqwest::StatusCode::FORBIDDEN {
+                let file_name = details["fileName"].as_str().unwrap_or("this file");
+                return Err(format!("CurseForge refused the download URL for required mod {} ({file_name}, {project}/{file}) with HTTP 403. This may be a third-party-download restriction on the file or an API-key permission issue. NOVA cannot bypass that restriction; try another modpack version or install this file through CurseForge.", i+1));
+            }
+            let payload = response.error_for_status()
+                .map_err(|e| format!("CurseForge could not provide mod {}: {e}", i+1))?
+                .json::<Value>().await
+                .map_err(|e| format!("CurseForge mod {} download response was unreadable: {e}", i+1))?;
+            payload["data"].as_str()
+                .ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}."))?
+                .to_owned()
+        };
+        let filename = format!("{project}-{file}.jar");
+        let mods_folder = folder.join("mods");
+        std::fs::create_dir_all(&mods_folder).map_err(|e| format!("Could not create mods folder: {e}"))?;
         let expected_size = details["fileLength"].as_u64()
             .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
             .ok_or_else(|| format!("CurseForge did not provide a valid size for mod {project}/{file}."))?;
