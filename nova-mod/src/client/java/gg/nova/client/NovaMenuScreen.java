@@ -15,8 +15,9 @@ import java.util.Properties;
 
 public final class NovaMenuScreen extends Screen {
     private static final int PANEL=0xF20D101A, CARD=0xFF171D2B, ACCENT=0xFF9B7CFF, MUTED=0xFF929CB2;
-    private final Map<String,Boolean> modules=new LinkedHashMap<>();
-    private final Map<String,String> categories=new LinkedHashMap<>();
+    private static final Map<String,Boolean> modules=new LinkedHashMap<>();
+    private static final Map<String,String> categories=new LinkedHashMap<>();
+    private static final Map<String,Boolean> backgrounds=new LinkedHashMap<>();
     private String category="All";
     private String settingsModule=null;
 
@@ -24,11 +25,7 @@ public final class NovaMenuScreen extends Screen {
         super(Component.literal("NOVA"));
         addModule("Keystrokes",true,"HUD");
         addModule("FPS",true,"HUD");
-        addModule("CPS",false,"HUD");
         addModule("Armor Status",false,"HUD");
-        addModule("Potion Effects",false,"HUD");
-        addModule("Toggle Sprint",false,"Player");
-        addModule("Crosshair",false,"Visual");
         addModule("Clock",false,"HUD");
         loadStates();
     }
@@ -36,6 +33,7 @@ public final class NovaMenuScreen extends Screen {
     private void addModule(String name, boolean enabled, String group) {
         modules.put(name,enabled);
         categories.put(name,group);
+        backgrounds.put(name,true);
     }
 
     private Path statePath() {
@@ -51,13 +49,19 @@ public final class NovaMenuScreen extends Screen {
             for(String name:modules.keySet()) {
                 String stored=values.getProperty(name);
                 if(stored!=null)modules.put(name,Boolean.parseBoolean(stored));
+                String background=values.getProperty(name+".background");
+                if(background!=null)backgrounds.put(name,Boolean.parseBoolean(background));
             }
         } catch(IOException ignored) { }
     }
 
+    public static boolean isEnabled(String name) { return modules.getOrDefault(name,false); }
+    public static boolean hasBackground(String name) { return backgrounds.getOrDefault(name,true); }
+
     private void saveStates() {
         Properties values=new Properties();
         modules.forEach((name,enabled)->values.setProperty(name,Boolean.toString(enabled)));
+        backgrounds.forEach((name,enabled)->values.setProperty(name+".background",Boolean.toString(enabled)));
         try {
             Files.createDirectories(statePath().getParent());
             try(OutputStream output=Files.newOutputStream(statePath())) {
@@ -106,8 +110,7 @@ public final class NovaMenuScreen extends Screen {
             int sy=t+ph-76;
             g.fill(cx,sy,l+pw-24,sy+50,0xFF242B3B);
             g.drawString(font,"SETTINGS  ·  "+settingsModule,cx+12,sy+8,0xFFFFFFFF,false);
-            g.drawString(font,"Preference saved locally when you toggle this module.",cx+12,sy+27,MUTED,false);
-            g.drawString(font,"CLICK TO CLOSE",l+pw-118,sy+8,ACCENT,false);
+            g.drawString(font,"Background: "+(hasBackground(settingsModule)?"ON":"OFF")+"  ·  CLICK TO CHANGE",cx+12,sy+27,MUTED,false);
         }
         g.drawString(font,"NOVA IN-GAME  -  EARLY DEVELOPMENT",l+26,t+ph-24,MUTED,false);
         super.render(g,mx,my,delta);
@@ -135,7 +138,15 @@ public final class NovaMenuScreen extends Screen {
             }
             visible++;
         }
-        if(settingsModule!=null) {settingsModule=null;return true;}
+        if(settingsModule!=null) {
+            int sy=t+ph-76;
+            if(mx>=cx&&mx<=l+pw-24&&my>=sy&&my<=sy+50) {
+                backgrounds.put(settingsModule,!hasBackground(settingsModule));
+                saveStates();
+                return true;
+            }
+            settingsModule=null;return true;
+        }
         return super.mouseClicked(mx,my,button);
     }
 
