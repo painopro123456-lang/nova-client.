@@ -212,7 +212,7 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
                 Err(error) if error.kind()==std::io::ErrorKind::WouldBlock=>{std::thread::sleep(Duration::from_millis(150));continue;}
                 Err(error)=>return Err(format!("Could not receive Microsoft's sign-in response: {error}")),
             };
-            let mut stream=stream;
+            let stream=stream;
             if stream.set_read_timeout(Some(Duration::from_secs(5))).is_err(){continue;}
             let mut reader=BufReader::new(stream);
             let mut first_line=String::new();
@@ -737,9 +737,11 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let mut archive=ZipArchive::new(archive_file)
         .map_err(|e| format!("The Modrinth pack is not a valid ZIP archive: {e}"))?;
     let mut index_bytes=Vec::new();
-    let mut index_entry=archive.by_name("modrinth.index.json").map_err(|_|"This Modrinth archive is missing modrinth.index.json.".to_string())?;
-    if index_entry.size()>16*1024*1024{return Err("The Modrinth manifest is unexpectedly large.".into());}
-    index_entry.read_to_end(&mut index_bytes).map_err(|e|format!("Could not read Modrinth manifest: {e}"))?;
+    {
+        let mut index_entry=archive.by_name("modrinth.index.json").map_err(|_|"This Modrinth archive is missing modrinth.index.json.".to_string())?;
+        if index_entry.size()>16*1024*1024{return Err("The Modrinth manifest is unexpectedly large.".into());}
+        index_entry.read_to_end(&mut index_bytes).map_err(|e|format!("Could not read Modrinth manifest: {e}"))?;
+    }
     let index: Value = serde_json::from_slice(&index_bytes)
         .map_err(|e| format!("Modrinth manifest is invalid: {e}"))?;
     if index["formatVersion"].as_u64() != Some(1) {
@@ -865,9 +867,11 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     let mut archive=ZipArchive::new(archive_file)
         .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
     let mut manifest_bytes=Vec::new();
-    let mut manifest_entry=archive.by_name("manifest.json").map_err(|_|"This CurseForge archive is missing manifest.json.".to_string())?;
-    if manifest_entry.size()>16*1024*1024{return Err("The CurseForge manifest is unexpectedly large.".into());}
-    manifest_entry.read_to_end(&mut manifest_bytes).map_err(|e|format!("Could not read CurseForge manifest: {e}"))?;
+    {
+        let mut manifest_entry=archive.by_name("manifest.json").map_err(|_|"This CurseForge archive is missing manifest.json.".to_string())?;
+        if manifest_entry.size()>16*1024*1024{return Err("The CurseForge manifest is unexpectedly large.".into());}
+        manifest_entry.read_to_end(&mut manifest_bytes).map_err(|e|format!("Could not read CurseForge manifest: {e}"))?;
+    }
     let manifest: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|e| format!("CurseForge manifest is invalid: {e}"))?;
     if manifest["manifestType"].as_str() != Some("minecraftModpack") {
