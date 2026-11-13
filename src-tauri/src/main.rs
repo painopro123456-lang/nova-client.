@@ -1569,33 +1569,60 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     if declared_download_bytes > MAX_ARCHIVE_TOTAL_BYTES {
         return Err("The Modrinth pack's required downloads exceed NOVA's 2 GiB safety limit.".into());
     }
-    let total_files = pack_files.iter().filter(|item| item["env"]["client"].as_str() != Some("unsupported")).count() as u64;
-    let mut completed_files = 0u64;
-    emit_pack_progress(&app, "files", 0, total_files, "Downloading Modrinth files");
+    // Validate every manifest entry first, then download with a small bounded worker
+    // pool. The old serial loop waited for each CDN request to finish before starting
+    // the next file, leaving the connection idle between hundreds of small downloads.
+    let mut download_jobs: Vec<(usize, Vec<String>, PathBuf, u64, String)> = Vec::new();
     for (i, item) in pack_files.iter().enumerate() {
         if item["env"]["client"].as_str() == Some("unsupported") { continue; }
         let relative = safe_relative_path(item["path"].as_str().ok_or("A Modrinth file path is missing.")?)?;
-        let urls = item["downloads"].as_array().ok_or("A Modrinth file has no download URLs.")?;
+        let urls = item["downloads"].as_array().ok_or("A Modrinth file has no download URLs.")?
+            .iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
         if urls.is_empty() { return Err("A Modrinth file has no download URLs.".into()); }
         let size = item["fileSize"].as_u64()
             .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
             .ok_or_else(|| format!("Modrinth file {} has missing or invalid size metadata.", i + 1))?;
         let sha1 = item["hashes"]["sha1"].as_str()
             .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
-            .ok_or_else(|| format!("Modrinth file {} has missing or invalid SHA-1 metadata.", i + 1))?;
-        let mut last_error = None;
-        let mut downloaded = false;
-        for candidate in urls.iter().filter_map(Value::as_str) {
-            match download_pack_file(&app, candidate, &folder.join(relative.clone()), Some(size), Some(sha1)).await {
-                Ok(()) => { downloaded = true; break; }
-                Err(error) => last_error = Some(error),
+            .ok_or_else(|| format!("Modrinth file {} has missing or invalid SHA-1 metadata.", i + 1))?
+            .to_owned();
+        download_jobs.push((i + 1, urls, folder.join(relative), size, sha1));
+    }
+    let total_files = download_jobs.len() as u64;
+    let mut completed_files = 0u64;
+    emit_pack_progress(&app, "files", 0, total_files, "Downloading Modrinth files");
+    const MAX_PARALLEL_MODRINTH_DOWNLOADS: usize = 4;
+    let mut pending_jobs = download_jobs.into_iter();
+    let mut workers = tokio::task::JoinSet::new();
+    let spawn_download = |workers: &mut tokio::task::JoinSet<Result<usize, String>>,
+                          job: (usize, Vec<String>, PathBuf, u64, String),
+                          app: tauri::AppHandle| {
+        workers.spawn(async move {
+            let (number, urls, destination, size, sha1) = job;
+            let mut last_error = None;
+            for candidate in urls {
+                match download_pack_file(&app, &candidate, &destination, Some(size), Some(&sha1)).await {
+                    Ok(()) => return Ok(number),
+                    Err(error) => last_error = Some(error),
+                }
             }
+            Err(format!("Mod file {number} failed from all available mirrors: {}",
+                last_error.unwrap_or_else(|| "No usable HTTPS download URL.".into())))
+        });
+    };
+    for _ in 0..MAX_PARALLEL_MODRINTH_DOWNLOADS {
+        if let Some(job) = pending_jobs.next() {
+            spawn_download(&mut workers, job, app.clone());
         }
-        if !downloaded {
-            return Err(format!("Mod file {} of {} failed from all available mirrors: {}", i + 1, pack_files.len(), last_error.unwrap_or_else(|| "No usable HTTPS download URL.".into())));
-        }
+    }
+    while let Some(result) = workers.join_next().await {
+        let number = result.map_err(|e| format!("Modrinth download worker failed: {e}"))??;
         completed_files += 1;
-        emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
+        emit_pack_progress(&app, "files", completed_files, total_files,
+            &format!("Downloaded file {completed_files} of {total_files} (latest: {number})"));
+        if let Some(job) = pending_jobs.next() {
+            spawn_download(&mut workers, job, app.clone());
+        }
     }
     extract_pack_overrides(&archive_path, "overrides/", &folder)?;
     extract_pack_overrides(&archive_path, "client-overrides/", &folder)?;
@@ -1817,7 +1844,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
 
     let mut metadata_jobs = tokio::task::JoinSet::new();
     let mut metadata_iter = required_files.into_iter();
-    const MAX_PARALLEL_MOD_DOWNLOADS: usize = 2;
+    const MAX_PARALLEL_MOD_DOWNLOADS: usize = 4;
     for _ in 0..MAX_PARALLEL_MOD_DOWNLOADS {
         if let Some((number, project, file)) = metadata_iter.next() {
             let client = client.clone();
