@@ -261,19 +261,20 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 
 
 /* Colored, timestamped diagnostic log viewer */
-.nova-log-viewer{width:100%;overflow:auto;border:1px solid #ffffff12;border-radius:10px;background:#080b12;padding:8px 0;font-family:"Cascadia Code","Consolas",ui-monospace,monospace;font-size:10px;line-height:1.65}
-.nova-log-row{display:grid;grid-template-columns:82px 54px minmax(0,1fr);align-items:start;gap:9px;padding:3px 11px;border-bottom:1px solid #ffffff06}
-.nova-log-row:hover{background:#ffffff07}
-.nova-log-time{color:#858ba0;white-space:nowrap;font-variant-numeric:tabular-nums}
-.nova-log-level{font-weight:800;letter-spacing:.5px;color:#9da5b8}
-.nova-log-message{color:#d0d3df;overflow-wrap:anywhere;white-space:pre-wrap}
-.nova-log-row.level-info .nova-log-level{color:#69baff}
-.nova-log-row.level-info .nova-log-level:before{content:"● ";font-size:8px}
-.nova-log-row.level-warn{background:#f0b84b08}
-.nova-log-row.level-warn .nova-log-level{color:#f2bd59}
-.nova-log-row.level-warn .nova-log-level:before{content:"▲ ";font-size:8px}
-.nova-log-row.level-error{background:#f05c6b0b}
-.nova-log-row.level-error .nova-log-level{color:#ff7785}
-.nova-log-row.level-error .nova-log-level:before{content:"● ";font-size:8px}
-.nova-log-row.level-error .nova-log-message{color:#ffd1d5}
+.nova-log-viewer{width:100%;overflow:auto;border:1px solid rgba(116,154,220,.22);border-radius:12px;background:linear-gradient(180deg,#090e19,#080b12);padding:9px 0;font-family:"Cascadia Code","Consolas",ui-monospace,monospace;font-size:11px;line-height:1.75;box-shadow:inset 0 1px 0 #ffffff08}
+.nova-log-row{display:grid;grid-template-columns:88px 66px minmax(0,1fr);align-items:start;gap:10px;padding:4px 12px;border-bottom:1px solid #ffffff08}
+.nova-log-row:hover{background:#ffffff0a}
+.nova-log-time{color:#8995ad;white-space:nowrap;font-variant-numeric:tabular-nums}
+.nova-log-level{font-size:9px;font-weight:900;letter-spacing:.7px;text-align:center;border-radius:5px;padding:1px 5px;background:#ffffff0c;color:#c2c9d8}
+.nova-log-message{color:#d5dbea;overflow-wrap:anywhere;white-space:pre-wrap}
+.nova-log-row.level-info .nova-log-level{color:#78c7ff;background:#238bd522}
+.nova-log-row.level-info .nova-log-message{color:#d6eaff}
+.nova-log-row.level-debug .nova-log-level,.nova-log-row.level-trace .nova-log-level{color:#b5a5ff;background:#8064df22}
+.nova-log-row.level-debug .nova-log-message,.nova-log-row.level-trace .nova-log-message{color:#d8d1ff}
+.nova-log-row.level-warn{background:#f0b84b0c}
+.nova-log-row.level-warn .nova-log-level{color:#ffd16b;background:#d99b2526}
+.nova-log-row.level-warn .nova-log-message{color:#ffe9b8}
+.nova-log-row.level-error,.nova-log-row.level-fatal{background:#f05c6b12}
+.nova-log-row.level-error .nova-log-level,.nova-log-row.level-fatal .nova-log-level{color:#ff8996;background:#e34b6028}
+.nova-log-row.level-error .nova-log-message,.nova-log-row.level-fatal .nova-log-message{color:#ffd1d5}
 .nova-log-empty{padding:18px;text-align:center;color:var(--muted);font-family:Inter,ui-sans-serif,system-ui;font-size:11px}
