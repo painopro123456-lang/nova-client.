@@ -44,6 +44,21 @@ fn http_client() -> Result<reqwest::Client,String> {
     reqwest::Client::builder().connect_timeout(Duration::from_secs(15)).timeout(Duration::from_secs(180))
         .build().map_err(|e|format!("Could not configure the download client: {e}"))
 }
+
+#[cfg(windows)]
+fn ensure_free_space(path:&Path,required:u64)->Result<(),String>{
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetDiskFreeSpaceExW;
+    let wide=path.as_os_str().encode_wide().chain(std::iter::once(0)).collect::<Vec<_>>();
+    let mut available=0u64;
+    let result=unsafe{GetDiskFreeSpaceExW(wide.as_ptr(),&mut available,std::ptr::null_mut(),std::ptr::null_mut())};
+    if result==0{return Err("NOVA could not check available disk space.".into());}
+    if available<required{return Err(format!("Not enough free disk space. NOVA needs about {} GB more space.",required.saturating_sub(available).div_ceil(1_073_741_824)));}
+    Ok(())
+}
+#[cfg(not(windows))]
+fn ensure_free_space(_path:&Path,_required:u64)->Result<(),String>{Ok(())}
+
 fn normalize_memory(value: Option<String>) -> Result<String,String> {
     let raw=value.unwrap_or_else(||"4G".to_owned()).trim().to_ascii_uppercase();
     let digits=raw.strip_suffix('G').unwrap_or(&raw);
@@ -576,6 +591,7 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let archive_sha1=file["hashes"]["sha1"].as_str();
     let folder=instance_folder(&name)?;
     std::fs::create_dir_all(&folder).map_err(|e|format!("Could not create instance folder: {e}"))?;
+    ensure_free_space(&folder,archive_size.unwrap_or(0).saturating_add(512*1024*1024))?;
     std::fs::write(folder.join(".nova-installing"),b"installing").map_err(|e|format!("Could not mark the modpack installation: {e}"))?;
     let archive_path=folder.join(".modrinth-pack.zip");
     emit_pack_progress(&app,"archive",0,0,"Downloading Modrinth archive");
@@ -603,6 +619,8 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     drop(archive);
     let pack_files = index["files"].as_array().ok_or("Modrinth manifest has no files list.")?;
     let total_files = pack_files.iter().filter(|item| item["env"]["client"].as_str() != Some("unsupported")).count() as u64;
+    let total_download_bytes=pack_files.iter().filter(|item|item["env"]["client"].as_str()!=Some("unsupported")).fold(0u64,|sum,item|sum.saturating_add(item["fileSize"].as_u64().unwrap_or(0)));
+    ensure_free_space(&folder,total_download_bytes.saturating_add(512*1024*1024))?;
     let mut completed_files = 0u64;
     emit_pack_progress(&app, "files", 0, total_files, "Downloading Modrinth files");
     for (i, item) in pack_files.iter().enumerate() {
@@ -701,6 +719,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     let archive_sha1=selected_file["hashes"].as_array().and_then(|hashes|hashes.iter().find(|h|h["algo"].as_u64()==Some(1))).and_then(|h|h["value"].as_str());
     let folder=instance_folder(&name)?;
     std::fs::create_dir_all(&folder).map_err(|e|format!("Could not create instance folder: {e}"))?;
+    ensure_free_space(&folder,archive_size.unwrap_or(0).saturating_add(512*1024*1024))?;
     std::fs::write(folder.join(".nova-installing"),b"installing").map_err(|e|format!("Could not mark the modpack installation: {e}"))?;
     let archive_path=folder.join(".curseforge-pack.zip");
     emit_pack_progress(&app,"archive",0,0,"Downloading CurseForge archive");
