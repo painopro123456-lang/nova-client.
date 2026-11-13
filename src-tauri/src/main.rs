@@ -369,7 +369,8 @@ fn account_store_path() -> Result<PathBuf, String> {
 #[cfg(windows)]
 fn protect_account_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
     use winapi::um::dpapi::CryptProtectData;
-    use winapi::um::wincrypt::{DATA_BLOB, CRYPTPROTECT_UI_FORBIDDEN};
+    use winapi::um::wincrypt::DATA_BLOB;
+    const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
     use winapi::um::winbase::LocalFree;
     use winapi::um::errhandlingapi::GetLastError;
     use std::ptr::null_mut;
@@ -1542,6 +1543,7 @@ async fn resolve_verified_modrinth_fallback(
     Ok(None)
 }
 
+#[tauri::command]
 async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let _reservation = InstanceReservation::acquire(name.clone())?;
