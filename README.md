@@ -1,34 +1,43 @@
 # NOVA Client
 
-A Windows-first Minecraft Java client and launcher focused on a fast native shell, polished interface, PvP tools, and straightforward instance management.
+NOVA Client is a Windows-first Minecraft Java launcher built with React, Vite, Tauri 2 and Rust.
 
-## Current status
+## Current implementation
 
-This repository starts the NOVA desktop application foundation. The current milestone is the launcher UI and project structure; Minecraft authentication, asset/version installation, process launching, mod services, and update delivery are not implemented yet.
+- Microsoft account sign-in using the browser-based authorization-code + PKCE flow.
+- Minecraft version discovery and Java/Minecraft preparation through the Rust launcher.
+- Isolated instance folders and Modrinth/CurseForge modpack installation.
+- Modpack version selection, installation progress events and instance recovery from disk.
+- Process supervision, duplicate-launch protection and safe refusal to delete a running instance.
+- Windows NSIS installer generation through GitHub Actions.
+- A separate early-development Fabric client mod with a NOVA menu.
 
-## Stack
+## Important limitations
 
-- React + Vite for the interface
-- Tauri 2 + Rust for the native Windows desktop shell
-- TypeScript-ready component structure (JavaScript in the first UI milestone)
+- The Fabric menu is an early UI preview. Its module switches are not gameplay features yet; do not treat them as working HUD modules.
+- Download cancellation, byte-level progress, streaming archive extraction, complete crash-log viewing and configurable memory allocation are still in development.
+- The CurseForge API credential is compiled into private Windows builds. A desktop binary cannot keep an embedded API key secret; distribute builds only to trusted users and rotate the key if exposure is suspected.
+- A successful CI build confirms compilation and packaging, not full runtime testing on every Windows machine.
 
 ## Development
+
+Install Node.js, the Rust toolchain and the Tauri Windows prerequisites, then run:
 
 ```bash
 npm install
 npm run dev
 ```
 
-To build the desktop app after installing the Rust toolchain and Tauri prerequisites:
+Build the Windows installer:
 
 ```bash
-npm run tauri dev
 npm run tauri build
 ```
 
-## Design principles
+## GitHub Actions
 
-- Windows 10/11 and Minecraft Java Edition first
-- Keep the native shell lightweight; avoid bundling a full browser runtime
-- Make every navigation destination usable and clearly distinguish implemented features from planned integrations
-- Never collect or store Microsoft passwords; authentication will use Microsoft's supported OAuth flow
+- **Frontend validation** runs the Vite production build.
+- **Windows build** creates `NOVA-Client-Setup.exe` and uploads it as the `NOVA-Client-Windows-Installer` artifact.
+- **NOVA In-Game Mod Build** builds the Fabric JAR separately.
+
+Keep implemented features, previews and planned work clearly distinguished in the UI and documentation.
