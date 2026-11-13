@@ -871,7 +871,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
     std::fs::create_dir_all(&game_root)
         .map_err(|e| format!("Could not create the Minecraft game folder: {e}"))?;
 
-    let mut options = LaunchOptions::new(game_root, version.clone());
+    let mut options = LaunchOptions::new(game_root.clone(), version.clone());
     if let Some(name) = instance_name.as_deref() {
         options.instance = Some(safe_instance_name(name)?);
     }
@@ -2119,6 +2119,25 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
 }
 
 
+#[tauri::command]
+fn delete_application_data() -> Result<(), String> {
+    let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let operations = active.lock().map_err(|_| "Could not inspect active Minecraft operations.")?;
+    if !operations.is_empty() {
+        return Err("Close Minecraft and wait for all installs to finish before deleting application data.".into());
+    }
+
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .ok_or_else(|| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
+    let app_data = PathBuf::from(local_app_data).join("NOVA Client");
+    if app_data.exists() {
+        std::fs::remove_dir_all(&app_data)
+            .map_err(|e| format!("Could not delete NOVA application data: {e}"))?;
+    }
+    drop(operations);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::{curseforge_loader_matches, modrinth_minecraft_version, safe_instance_name, safe_relative_path, InstanceReservation, TEMP_FILE_COUNTER};
@@ -2259,7 +2278,8 @@ fn main() {
             list_instances,
             set_instance_icon,
             list_instance_content,
-            delete_instance
+            delete_instance,
+            delete_application_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running NOVA Client");
