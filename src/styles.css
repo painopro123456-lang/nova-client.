@@ -469,3 +469,36 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
   .nova-pack-manager .nova-pack-tabs button{flex:1 1 auto;justify-content:center}
   .nova-pack-file-list{overflow-x:auto!important}
 }
+
+
+/* Visible launch feedback inside the selected modpack window. */
+.nova-launch-status{
+  display:flex;
+  align-items:flex-start;
+  gap:14px;
+  width:100%;
+  margin:16px 0 8px;
+  padding:15px 18px;
+  border:1px solid rgba(255,255,255,.13);
+  border-radius:12px;
+  background:#20252d;
+  color:#e8edf4;
+  font-size:14px;
+  line-height:1.55;
+}
+.nova-launch-status b{
+  flex:none;
+  min-width:78px;
+  padding:4px 8px;
+  border-radius:6px;
+  background:#ffffff12;
+  color:#dce5ef;
+  font-size:11px;
+  letter-spacing:.7px;
+  text-align:center;
+}
+.nova-launch-status span{min-width:0;overflow-wrap:anywhere}
+.nova-launch-status.phase-starting b{background:#4c3b1b;color:#ffd58a}
+.nova-launch-status.phase-running b{background:#174d35;color:#83f0b0}
+.nova-launch-status.phase-failed b,.nova-launch-status.phase-crashed b{background:#59252c;color:#ffabb4}
+.nova-launch-status.phase-closed b{background:#343b46;color:#d0d7e1}
