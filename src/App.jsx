@@ -1,5 +1,5 @@
 import { MICROSOFT_CLIENT_ID } from "./config";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -319,6 +319,27 @@ function LocalInstances({ versions, memoryMb, setPage }) {
       setInstancePanel(current=>current?{...current,loading:false,error:typeof error==="string"?error:(error.message||"Could not load instance data.")}:current);
     }
   };
+  useEffect(()=>{
+    const instance=selectedInstance;
+    if(!instance||selectedInstanceTab!=="logs")return;
+    let active=true;
+    let polling=false;
+    const refresh=async()=>{
+      if(polling||!active)return;
+      polling=true;
+      try{
+        const result=await invoke("get_game_logs",{instanceName:instance.instanceName});
+        if(active)setInstancePanel(current=>current?.instance?.instanceName===instance.instanceName&&current.tab==="logs"
+          ?{...current,loading:false,error:"",logs:result?.minecraftLog||"No Minecraft logs found."}:current);
+      }catch(error){
+        if(active)setInstancePanel(current=>current?.instance?.instanceName===instance.instanceName&&current.tab==="logs"
+          ?{...current,loading:false,error:typeof error==="string"?error:(error.message||"Could not refresh game logs.")}:current);
+      }finally{polling=false;}
+    };
+    refresh();
+    const timer=setInterval(refresh,1200);
+    return()=>{active=false;clearInterval(timer);};
+  },[selectedInstance?.instanceName,selectedInstanceTab]);
   const removePack=async(id,pack)=>{
     setAction("Deleting "+pack.name+"…");
     try{
@@ -393,7 +414,13 @@ function LocalInstances({ versions, memoryMb, setPage }) {
 }
 
 function LogViewer({ text: raw, maxHeight=260 }) {
-  const rows=String(raw||"").split(/\r?\n/).filter(Boolean).slice(-500);
+  const logRef=useRef(null);
+  const followLatest=useRef(true);
+  useEffect(()=>{
+    const node=logRef.current;
+    if(node&&followLatest.current)node.scrollTop=node.scrollHeight;
+  },[raw]);
+  const rows=String(raw||"").split(/\r?\n/).filter(Boolean).slice(-1000);
   const parsed=rows.map((line,index)=>{
     let time="";
     let message=line;
@@ -420,7 +447,7 @@ function LogViewer({ text: raw, maxHeight=260 }) {
     if(level==="WARNING")level="WARN";
     return {key:index,time,level,message};
   });
-  return <div className="nova-log-viewer" style={{maxHeight}} role="log" aria-live="polite">
+  return <div ref={logRef} className="nova-log-viewer" style={{maxHeight}} role="log" aria-live="polite" onScroll={e=>{const node=e.currentTarget;followLatest.current=node.scrollHeight-node.scrollTop-node.clientHeight<90;}}>
     {parsed.length===0?<div className="nova-log-empty">No log entries yet.</div>:parsed.map(row=><div className={"nova-log-row level-"+row.level.toLowerCase()} key={row.key}>
       <span className="nova-log-time">{row.time||"—"}</span><span className="nova-log-level">{row.level}</span><span className="nova-log-message">{row.message}</span>
     </div>)}
