@@ -6,7 +6,7 @@ use keyring::Entry;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
@@ -673,6 +673,7 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
         .read_to_end(&mut index_bytes).map_err(|e| format!("Could not read Modrinth manifest: {e}"))?;
     let index: Value = serde_json::from_slice(&index_bytes)
         .map_err(|e| format!("Modrinth manifest is invalid: {e}"))?;
+    drop(archive);
     if index["formatVersion"].as_u64() != Some(1) {
         return Err("This Modrinth modpack format is not supported.".into());
     }
@@ -800,6 +801,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         .read_to_end(&mut manifest_bytes).map_err(|e| format!("Could not read CurseForge manifest: {e}"))?;
     let manifest: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|e| format!("CurseForge manifest is invalid: {e}"))?;
+    drop(archive);
     if manifest["manifestType"].as_str() != Some("minecraftModpack") {
         return Err("The downloaded CurseForge file is not a Minecraft modpack.".into());
     }
