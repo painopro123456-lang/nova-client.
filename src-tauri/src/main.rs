@@ -357,7 +357,11 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         options.loader.build = loader_build;
         options.loader.enable = true;
     }
-    options.memory.max = "4G".to_owned();
+    let memory_mb = memory_mb.unwrap_or(4096);
+    if !(1024..=16384).contains(&memory_mb) {
+        return Err("Memory allocation must be between 1024 MB and 16384 MB.".into());
+    }
+    options.memory.max = format!("{memory_mb}M");
     options.download_concurrency = 8;
 
     let launch = Launch::new(options, account)
