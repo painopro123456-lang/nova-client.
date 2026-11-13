@@ -41,6 +41,31 @@ const MAX_ARCHIVE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 static ACTIVE_LAUNCHES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
+struct InstanceReservation {
+    name: String,
+}
+
+impl InstanceReservation {
+    fn acquire(name: String) -> Result<Self, String> {
+        let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+        let mut operations = active.lock().map_err(|_| "Could not inspect active Minecraft operations.")?;
+        if !operations.insert(name.clone()) {
+            return Err("This instance is already running or another operation is using it.".into());
+        }
+        Ok(Self { name })
+    }
+}
+
+impl Drop for InstanceReservation {
+    fn drop(&mut self) {
+        if let Some(active) = ACTIVE_LAUNCHES.get() {
+            if let Ok(mut operations) = active.lock() {
+                operations.remove(&self.name);
+            }
+        }
+    }
+}
+
 fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(12))
@@ -296,6 +321,13 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
 #[tauri::command]
 async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>, memory_mb: Option<u32>) -> Result<(), String> {
     let mut version = version.trim().to_owned();
+    let launch_key = if let Some(instance) = instance_name.as_deref() {
+        safe_instance_name(instance)?
+    } else {
+        format!("default-{version}")
+    };
+    // Reserve before reading metadata so delete/install cannot race the launch setup.
+    let reservation = InstanceReservation::acquire(launch_key)?;
     let mut loader = loader.unwrap_or_else(|| "vanilla".to_owned());
     let mut loader_build = loader_build.unwrap_or_else(|| "latest".to_owned());
     if let Some(instance) = instance_name.as_deref() {
@@ -366,28 +398,13 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
 
     let launch = Launch::new(options, account)
         .map_err(|e| format!("Could not prepare Minecraft: {e}"))?;
-    let launch_key = instance_name.as_deref()
-        .map(safe_instance_name).transpose()?
-        .unwrap_or_else(|| format!("default-{version}"));
-    let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
-    {
-        let mut running = active.lock().map_err(|_| "Could not inspect active Minecraft launches.")?;
-        if !running.insert(launch_key.clone()) {
-            return Err("This Minecraft instance is already running.".into());
-        }
-    }
-    let mut child = match launch.run().await {
-        Ok(child) => child,
-        Err(error) => {
-            if let Ok(mut running) = active.lock() { running.remove(&launch_key); }
-            return Err(format!("Minecraft could not be installed or started: {error}"));
-        }
-    };
+    let mut child = launch.run().await
+        .map_err(|error| format!("Minecraft could not be installed or started: {error}"))?;
 
-    // Supervise the child and release the instance lock when the game exits.
+    // Keep the reservation alive until the game exits; dropping it releases the lock.
     tokio::spawn(async move {
+        let _reservation = reservation;
         let exit = child.wait().await;
-        if let Ok(mut running) = active.lock() { running.remove(&launch_key); }
         let (success, code) = match exit {
             Ok(status) => (status.success(), status.code()),
             Err(_) => (false, None),
@@ -684,18 +701,8 @@ async fn install_mod_to_instance(
     instance_name: String,
 ) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
-    let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
-    {
-        let mut operations = active.lock().map_err(|_| "Could not inspect active Minecraft operations.")?;
-        if !operations.insert(name.clone()) {
-            return Err("This instance is running or another operation is already using it. Close Minecraft and try again.".into());
-        }
-    }
-    let result = install_mod_to_instance_inner(app, provider, project_id, version_id, name.clone()).await;
-    if let Ok(mut operations) = active.lock() {
-        operations.remove(&name);
-    }
-    result
+    let _reservation = InstanceReservation::acquire(name.clone())?;
+    install_mod_to_instance_inner(app, provider, project_id, version_id, name).await
 }
 
 async fn install_mod_to_instance_inner(
