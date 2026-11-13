@@ -159,6 +159,7 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
       const metadata=provider==="modrinth"
         ? await invoke("install_modrinth_modpack",{projectId,instanceName,versionId:selectedPackVersion})
         : await invoke("install_curseforge_modpack",{modId:projectId,instanceName,fileId:Number(selectedPackVersion)});
+      if(project.image){await invoke("set_instance_icon",{instanceName:metadata.instanceName,iconUrl:project.image});metadata.iconUrl=project.image;}
       // Public modpack files can be downloaded without a Minecraft login.
       if(!signedIn){
         const previous=installed[storageKey];
