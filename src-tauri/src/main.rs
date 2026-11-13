@@ -265,6 +265,7 @@ async fn minecraft_versions() -> Result<Value, String> {
 #[tauri::command]
 async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _reservation = InstanceReservation::acquire(name.clone())?;
     let folder = instance_folder(&name)?;
     let metadata: Value = serde_json::from_slice(
         &std::fs::read(folder.join("nova-instance.json"))
@@ -868,6 +869,7 @@ async fn install_mod_to_instance_inner(
 #[tauri::command]
 async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _reservation = InstanceReservation::acquire(name.clone())?;
     if project_id.is_empty() || !project_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
         return Err("The selected Modrinth modpack project ID is invalid.".into());
     }
@@ -974,6 +976,7 @@ async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
 #[tauri::command]
 async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _reservation = InstanceReservation::acquire(name.clone())?;
     if mod_id.parse::<u64>().ok().filter(|id| *id > 0).is_none() {
         return Err("The selected CurseForge modpack project ID is invalid.".into());
     }
@@ -1056,8 +1059,42 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         let filename = format!("{project}-{file}.jar");
         let mods_folder = folder.join("mods");
         std::fs::create_dir_all(&mods_folder).map_err(|e| format!("Could not create mods folder: {e}"))?;
-        download_pack_file(&app, &url, &mods_folder.join(filename), None, None).await
+        let mod_details: Value = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}"))
+            .headers(headers.clone()).send().await
+            .map_err(|e| format!("Could not verify CurseForge mod {}: {e}", i+1))?
+            .error_for_status().map_err(|e| format!("CurseForge could not verify mod {}: {e}", i+1))?
+            .json().await.map_err(|e| format!("CurseForge mod {} metadata was unreadable: {e}", i+1))?;
+        let details = &mod_details["data"];
+        if details["modId"].as_u64() != Some(project) || details["id"].as_u64() != Some(file) {
+            return Err(format!("CurseForge returned mismatched metadata for mod {project}/{file}."));
+        }
+        let expected_size = details["fileLength"].as_u64()
+            .ok_or_else(|| format!("CurseForge did not provide the expected size for mod {project}/{file}."))?;
+        let expected_sha1 = details["hashes"].as_array()
+            .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
+            .and_then(|hash| hash["value"].as_str())
+            .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+            .ok_or_else(|| format!("CurseForge did not provide a valid SHA-1 checksum for mod {project}/{file}."))?;
+        let destination = mods_folder.join(&filename);
+        let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+        let staging = mods_folder.join(format!(".{filename}.{}.{sequence}.partial", std::process::id()));
+        download_pack_file(&app, &url, &staging, Some(expected_size), Some(expected_sha1)).await
             .map_err(|e| format!("Could not save CurseForge mod {}: {e}", i+1))?;
+        let jar_check = std::fs::File::open(&staging)
+            .map_err(|e| format!("Could not verify CurseForge mod {}: {e}", i+1))
+            .and_then(|file| ZipArchive::new(file).map(|_| ()).map_err(|e| format!("CurseForge mod {} is not a valid JAR archive: {e}", i+1)));
+        if let Err(error) = jar_check {
+            let _ = std::fs::remove_file(&staging);
+            return Err(error);
+        }
+        if destination.exists() {
+            let _ = std::fs::remove_file(&staging);
+            return Err(format!("CurseForge mod {project}/{file} is already present in the modpack folder."));
+        }
+        std::fs::rename(&staging, &destination).map_err(|e| {
+            let _ = std::fs::remove_file(&staging);
+            format!("Could not finalize CurseForge mod {}: {e}", i+1)
+        })?;
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
     }
@@ -1074,6 +1111,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
 #[tauri::command]
 fn create_instance(instance_name: String, display_name: String, version: String, loader: String) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _reservation = InstanceReservation::acquire(name.clone())?;
     let version = version.trim();
     if version.is_empty() || version.eq_ignore_ascii_case("null") || version.eq_ignore_ascii_case("undefined") {
         return Err("Choose a valid Minecraft version.".into());
