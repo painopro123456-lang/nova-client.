@@ -993,6 +993,17 @@ fn delete_instance(instance_name: String) -> Result<(), String> {
         return Err("Close Minecraft before deleting this running instance.".into());
     }
     let folder=instance_folder(&key)?;
+    let install_marker=folder.join(".nova-installing");
+    if install_marker.exists(){
+        let installer_pid=std::fs::read_to_string(&install_marker).ok().and_then(|value|value.trim().parse::<u32>().ok());
+        let active=match installer_pid{
+            Some(pid)=>process_is_running(pid),
+            None=>!std::fs::metadata(&install_marker).and_then(|metadata|metadata.modified()).ok()
+                .and_then(|modified|modified.elapsed().ok()).is_some_and(|age|age>Duration::from_secs(600))
+        };
+        if active{return Err("Another NOVA process is still installing files into this instance.".into());}
+        let _=std::fs::remove_file(&install_marker);
+    }
     let running_marker=folder.join(".nova-running.pid");
     if let Ok(contents)=std::fs::read_to_string(&running_marker){
         if let Ok(pid)=contents.trim().parse::<u32>(){
