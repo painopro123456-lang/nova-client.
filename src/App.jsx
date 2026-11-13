@@ -63,7 +63,7 @@ function Home({ onNavigate, selectedVersion, setSelectedVersion, versions, versi
 }
 
 
-function Catalog({ packs, memoryMax }) {
+function Catalog({ packs, memoryMax, onNavigate }) {
   const [q,setQ]=useState("");
   const [provider,setProvider]=useState("modrinth");
   const [hits,setHits]=useState([]);
@@ -72,6 +72,10 @@ function Catalog({ packs, memoryMax }) {
   const [page,setPage]=useState(0);
   const [hasNext,setHasNext]=useState(false);
   const [installed,setInstalled]=useState(()=>readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v)));
+  const [instances,setInstances]=useState(()=>readStored("nova.instances",[],Array.isArray));
+  const [targetInstance,setTargetInstance]=useState(()=>{const custom=readStored("nova.instances",[],Array.isArray);const packs=readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v));return custom[0]?.instanceName||Object.values(packs)[0]?.instanceName||"";});
+  const [modInstallBusy,setModInstallBusy]=useState("");
+  const [modInstallMessage,setModInstallMessage]=useState("");
   const [installingId,setInstallingId]=useState("");
   const [packActionMessage,setPackActionMessage]=useState("");
   const [versionProject,setVersionProject]=useState(null);
@@ -107,6 +111,21 @@ function Catalog({ packs, memoryMax }) {
   },[q,packs,provider,page]);
 
   useEffect(()=>{writeStored("nova.installedPacks",installed);},[installed]);
+  useEffect(()=>{
+    const refresh=()=>{const next=readStored("nova.instances",[],Array.isArray);const packs=readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v));setInstances(next);setTargetInstance(current=>current||next[0]?.instanceName||Object.values(packs)[0]?.instanceName||"");};
+    window.addEventListener("nova-instances-recovered",refresh);
+    return()=>window.removeEventListener("nova-instances-recovered",refresh);
+  },[]);
+  const availableInstances=[...instances,...Object.values(installed)].filter((item,index,list)=>item?.instanceName&&list.findIndex(other=>other?.instanceName===item.instanceName)===index);
+  const installMod=async(project)=>{
+    if(!targetInstance){setModInstallMessage("Create an instance first, then select it here.");return;}
+    setModInstallBusy(String(project.id));setModInstallMessage("Installing "+project.title+"…");
+    try{
+      const result=await invoke("install_mod_file",{provider,projectId:String(project.id),instanceName:targetInstance});
+      setModInstallMessage((result.fileName||project.title)+" installed in "+targetInstance+".");
+    }catch(error){setModInstallMessage(typeof error==="string"?error:(error.message||"Could not install this mod."));}
+    finally{setModInstallBusy("");}
+  };
   useEffect(()=>{
     let alive=true;
     let unlisten;
@@ -204,21 +223,24 @@ function Catalog({ packs, memoryMax }) {
       </div>
     </div>
     <div className="catalog-search-row">
+      {!packs&&<div className="catalog-source-pill"><span>INSTALL INTO</span><select value={targetInstance} onChange={e=>setTargetInstance(e.target.value)} disabled={!availableInstances.length}><option value="">{availableInstances.length?"Choose instance":"No instances"}</option>{availableInstances.map(instance=><option key={instance.instanceName} value={instance.instanceName}>{instance.name||instance.instanceName}</option>)}</select></div>}
       <div className="catalog-search"><Search size={17}/><input value={q} onChange={e=>{setQ(e.target.value);setPage(0);}} placeholder={packs?"Search modpacks, themes, adventures…":"Search mods, performance, shaders, utilities…"}/>{q&&<button className="clear-search" onClick={()=>setQ("")} aria-label="Clear search"><X size={14}/></button>}</div>
       <div className="catalog-source-pill"><span className="source-dot"/> {provider==="modrinth"?"MODRINTH INDEX":"CURSEFORGE API"}</div>
     </div>
     {busy&&<div className="catalog-state"><div className="loading-orbit"/><b>Finding great projects</b><span>Searching {provider==="modrinth"?"Modrinth":"CurseForge"}…</span></div>}
     {error&&<div className="catalog-note error"><CircleHelp size={16}/><span>{error}</span></div>}
     {packActionMessage&&packs&&<div className="catalog-note"><span>{packActionMessage}</span></div>}
+    {modInstallMessage&&!packs&&<div className="catalog-note"><span>{modInstallMessage}</span>{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
     {!busy&&!error&&hits.length===0&&<div className="catalog-state"><div className="empty-library"><Blocks size={25}/></div><b>No projects found</b><span>Try another search or switch catalog source.</span></div>}
     {!busy&&hits.length>0&&<div className="catalog-results-label"><span>{hits.length} PROJECTS ON THIS PAGE</span><span>PAGE {String(page+1).padStart(2,"0")}</span></div>}
     <div className="catalog-grid">{hits.map((x,i)=><article className="catalog-card" key={x.id}>
       <div className="project-card-top">{x.image?<img src={x.image} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<span className="project-source">{provider==="modrinth"?"MODRINTH":"CURSEFORGE"}</span><span className="project-rank">{String(page*24+i+1).padStart(2,"0")}</span></div>
       <h3>{x.title}</h3><p>{x.description}</p>
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
-      {packs&&<div className="pack-install-row">{installed[provider+":"+String(x.id)]
+      {packs?<div className="pack-install-row">{installed[provider+":"+String(x.id)]
         ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Install & Play"}</button>
-        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
+        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>
+      : <div className="pack-install-row"><button className="primary-btn" onClick={()=>installMod(x)} disabled={!targetInstance||Boolean(modInstallBusy)}><ArrowDownToLine size={14}/>{modInstallBusy===String(x.id)?"Installing…":"Install mod"}</button></div>}
     </article>)}</div>}
     {installDialog&&<div className="pack-version-backdrop install-progress-backdrop" role="presentation">
       <section className="pack-version-dialog install-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="install-progress-title">
@@ -257,7 +279,7 @@ function LocalInstances({ versions, memoryMax }) {
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
   useEffect(()=>{if(!version && versions.length) setVersion(versions.find(v=>v.type==="release")?.id || versions[0].id);},[versions,version]);
-  useEffect(()=>{writeStored("nova.instances",items)},[items]);
+  useEffect(()=>{writeStored("nova.instances",items);window.dispatchEvent(new Event("nova-instances-recovered"));},[items]);
   useEffect(()=>{const recover=()=>{setItems(readStored("nova.instances",[],Array.isArray));setPacks(readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v)));};window.addEventListener("nova-instances-recovered",recover);return()=>window.removeEventListener("nova-instances-recovered",recover);},[]);
   const add=async()=>{if(!name.trim()||!version)return;const instanceName=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);setAction("Creating instance "+name.trim()+"…");try{const metadata=await invoke("create_instance",{instanceName,displayName:name.trim(),version,loader});setItems(a=>[...a,{id:Date.now(),...metadata}]);setName("");setAction((metadata.name||name.trim())+" created. Press Install & Play to install Minecraft and its loader.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not create this instance."));}};
   const playPack=async pack=>{setAction("Installing Minecraft and loader for "+pack.name+" (if needed), then launching…");try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName,memoryMax});setAction(pack.name+" started.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}};
@@ -357,5 +379,5 @@ export default function App() {
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
-  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/>{gameExit&&<div className="catalog-note" role="status">{gameExit}<button className="text-button" onClick={()=>setGameExit("")}>Dismiss</button></div>}<div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} memoryMax={memoryMax} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false} memoryMax={memoryMax}/> : page === "modpacks" ? <Catalog packs={true} memoryMax={memoryMax}/> : page === "instances" ? <LocalInstances versions={versions} memoryMax={memoryMax}/> : page === "settings" ? <SettingsPage memoryMax={memoryMax} setMemoryMax={setMemoryMax}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
+  return <div className="app-shell"><Sidebar page={page} setPage={setPage} signedIn={signedIn} accountName={accountName} onSignOut={handleSignOut}/><main className="main-area"><Topbar title={title} subtitle={subtitle}/>{gameExit&&<div className="catalog-note" role="status">{gameExit}<button className="text-button" onClick={()=>setGameExit("")}>Dismiss</button></div>}<div className="page-content">{page === "home" ? <Home onNavigate={setPage} selectedVersion={selectedVersion} setSelectedVersion={setSelectedVersion} versions={versions} versionsLoading={versionsLoading} loaderType={loaderType} setLoaderType={setLoaderType} memoryMax={memoryMax} launching={launching} onLaunch={handleLaunch} onLogin={handleLogin} signedIn={signedIn} accountName={accountName} loginBusy={loginBusy} loginUrl={loginUrl} message={message}/> : page === "mods" ? <Catalog packs={false} memoryMax={memoryMax} onNavigate={setPage}/> : page === "modpacks" ? <Catalog packs={true} memoryMax={memoryMax} onNavigate={setPage}/> : page === "instances" ? <LocalInstances versions={versions} memoryMax={memoryMax}/> : page === "settings" ? <SettingsPage memoryMax={memoryMax} setMemoryMax={setMemoryMax}/> : <EmptyPage page={page} setPage={setPage}/>}</div><footer className="main-footer"><span>© 2026 NOVA CLIENT</span><span>BUILT FOR THE NEXT SESSION <Sparkles size={12}/></span></footer></main></div>;
 }
