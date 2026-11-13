@@ -1872,7 +1872,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     let mut download_jobs = tokio::task::JoinSet::new();
     let mut next = resolved.into_iter();
     let mut completed_files = 0u64;
-    const MAX_PARALLEL_MOD_DOWNLOADS: usize = 4;
+
     for _ in 0..MAX_PARALLEL_MOD_DOWNLOADS {
         if let Some(entry) = next.next() {
             let app = app.clone();
