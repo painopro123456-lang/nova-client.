@@ -96,8 +96,26 @@ fn ensure_free_space(path:&Path,required:u64)->Result<(),String>{
 #[cfg(not(windows))]
 fn ensure_free_space(_path:&Path,_required:u64)->Result<(),String>{Ok(())}
 
+#[cfg(windows)]
+fn recommended_memory_max_value()->String{
+    use windows_sys::Win32::System::SystemInformation::{GlobalMemoryStatusEx,MEMORYSTATUSEX};
+    let mut status:MEMORYSTATUSEX=unsafe{std::mem::zeroed()};
+    status.dwLength=std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    let ok=unsafe{GlobalMemoryStatusEx(&mut status)};
+    if ok!=0{
+        let total_gb=(status.ullTotalPhys/1_073_741_824).min(u64::from(u8::MAX)) as u8;
+        return format!("{}G",(total_gb/2).clamp(1,8));
+    }
+    "4G".to_owned()
+}
+#[cfg(not(windows))]
+fn recommended_memory_max_value()->String{"4G".to_owned()}
+
+#[tauri::command]
+fn recommended_memory_max()->String{recommended_memory_max_value()}
+
 fn normalize_memory(value: Option<String>) -> Result<String,String> {
-    let raw=value.unwrap_or_else(||"4G".to_owned()).trim().to_ascii_uppercase();
+    let raw=value.unwrap_or_else(recommended_memory_max_value).trim().to_ascii_uppercase();
     let digits=raw.strip_suffix('G').unwrap_or(&raw);
     let gigabytes=digits.parse::<u8>().map_err(|_|"Memory must be a whole number of gigabytes.".to_string())?;
     if !(1..=32).contains(&gigabytes) { return Err("Minecraft memory must be between 1 GB and 32 GB.".into()); }
@@ -1039,6 +1057,7 @@ fn main() {
             list_instances,
             cancel_modpack_install,
             install_mod_file,
+            recommended_memory_max,
             delete_instance
         ])
         .run(tauri::generate_context!())
