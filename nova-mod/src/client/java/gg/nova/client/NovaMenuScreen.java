@@ -1,5 +1,6 @@
 package gg.nova.client;
 
+import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
@@ -23,6 +24,11 @@ public final class NovaMenuScreen extends Screen {
 
     public NovaMenuScreen() {
         super(Component.literal("NOVA"));
+        initialize();
+    }
+
+    public static void initialize() {
+        if(!modules.isEmpty())return;
         addModule("Keystrokes",true,"HUD");
         addModule("FPS",true,"HUD");
         addModule("Armor Status",false,"HUD");
@@ -30,17 +36,17 @@ public final class NovaMenuScreen extends Screen {
         loadStates();
     }
 
-    private void addModule(String name, boolean enabled, String group) {
+    private static void addModule(String name, boolean enabled, String group) {
         modules.put(name,enabled);
         categories.put(name,group);
         backgrounds.put(name,true);
     }
 
-    private Path statePath() {
-        return Path.of("config","nova-modules.properties");
+    private static Path statePath() {
+        return Minecraft.getInstance().gameDirectory.toPath().resolve("config").resolve("nova-modules.properties");
     }
 
-    private void loadStates() {
+    private static void loadStates() {
         Path path=statePath();
         if(!Files.isRegularFile(path))return;
         Properties values=new Properties();
@@ -58,7 +64,7 @@ public final class NovaMenuScreen extends Screen {
     public static boolean isEnabled(String name) { return modules.getOrDefault(name,false); }
     public static boolean hasBackground(String name) { return backgrounds.getOrDefault(name,true); }
 
-    private void saveStates() {
+    private static void saveStates() {
         Properties values=new Properties();
         modules.forEach((name,enabled)->values.setProperty(name,Boolean.toString(enabled)));
         backgrounds.forEach((name,enabled)->values.setProperty(name+".background",Boolean.toString(enabled)));

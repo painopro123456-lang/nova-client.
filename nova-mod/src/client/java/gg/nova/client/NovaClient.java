@@ -10,6 +10,7 @@ public final class NovaClient implements ClientModInitializer {
     private KeyMapping openMenuKey;
     @Override public void onInitializeClient() {
         openMenuKey=KeyBindingHelper.registerKeyBinding(new KeyMapping("key.nova.open_menu",GLFW.GLFW_KEY_RIGHT_SHIFT,KeyMapping.Category.MISC));
+        NovaMenuScreen.initialize();
         NovaHud.register();
         ClientTickEvents.END_CLIENT_TICK.register(client->{
             while(openMenuKey.consumeClick()){
