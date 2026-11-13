@@ -9,7 +9,7 @@ use sha1::{Digest, Sha1};
 use std::io::{BufRead, BufReader, Cursor, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use std::sync::{Mutex, OnceLock};
 use std::collections::HashSet;
 use zip::ZipArchive;
@@ -23,8 +23,21 @@ const MAX_ARCHIVE_BYTES: usize = 1024 * 1024 * 1024;
 const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 static ACTIVE_INSTANCES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static ACTIVE_INSTALLS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static AUTH_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 fn active_instances() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTANCES.get_or_init(|| Mutex::new(HashSet::new())) }
+fn active_installs() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTALLS.get_or_init(|| Mutex::new(HashSet::new())) }
+struct InstallGuard { name: String }
+impl InstallGuard {
+    fn acquire(name: String) -> Result<Self,String> {
+        let mut active=active_installs().lock().map_err(|_|"The install registry is unavailable.".to_string())?;
+        if !active.insert(name.clone()) { return Err("This instance is already being installed or prepared.".into()); }
+        Ok(Self{name})
+    }
+}
+impl Drop for InstallGuard {
+    fn drop(&mut self) { if let Ok(mut active)=active_installs().lock(){active.remove(&self.name);} }
+}
 fn http_client() -> Result<reqwest::Client,String> {
     reqwest::Client::builder().connect_timeout(Duration::from_secs(15)).timeout(Duration::from_secs(180))
         .build().map_err(|e|format!("Could not configure the download client: {e}"))
@@ -237,6 +250,7 @@ async fn minecraft_versions() -> Result<Value, String> {
 #[tauri::command]
 async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String, memory_max: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _install_guard=InstallGuard::acquire(name.clone())?;
     let folder = instance_folder(&name)?;
     let metadata: Value = serde_json::from_slice(
         &std::fs::read(folder.join("nova-instance.json"))
@@ -516,15 +530,18 @@ fn loader_from_id(id: &str) -> Result<(String, String), String> {
 
 fn save_instance_metadata(folder: &Path, metadata: Value) -> Result<Value, String> {
     std::fs::create_dir_all(folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
-    std::fs::write(folder.join("nova-instance.json"), serde_json::to_vec_pretty(&metadata)
-        .map_err(|e| format!("Could not prepare instance metadata: {e}"))?)
-        .map_err(|e| format!("Could not save instance metadata: {e}"))?;
+    let temp=folder.join("nova-instance.json.tmp");
+    std::fs::write(&temp,serde_json::to_vec_pretty(&metadata).map_err(|e|format!("Could not prepare instance metadata: {e}"))?)
+        .map_err(|e|format!("Could not save instance metadata: {e}"))?;
+    std::fs::rename(&temp,folder.join("nova-instance.json")).map_err(|e|{let _=std::fs::remove_file(&temp);format!("Could not finalize instance metadata: {e}")})?;
+    let _=std::fs::remove_file(folder.join(".nova-installing"));
     Ok(metadata)
 }
 
 #[tauri::command]
 async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _install_guard=InstallGuard::acquire(name.clone())?;
     let client = reqwest::Client::new();
     let versions: Value = client.get(format!("https://api.modrinth.com/v2/project/{project_id}/version"))
         .send().await.map_err(|e| format!("Could not reach Modrinth: {e}"))?
@@ -558,6 +575,7 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     } else { ("vanilla".to_owned(), String::new()) };
     let folder = instance_folder(&name)?;
     std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    std::fs::write(folder.join(".nova-installing"),b"installing").map_err(|e|format!("Could not mark the modpack installation: {e}"))?;
     let pack_files = index["files"].as_array().ok_or("Modrinth manifest has no files list.")?;
     let total_files = pack_files.iter().filter(|item| item["env"]["client"].as_str() != Some("unsupported")).count() as u64;
     let mut completed_files = 0u64;
@@ -612,6 +630,7 @@ async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
 #[tauri::command]
 async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _install_guard=InstallGuard::acquire(name.clone())?;
     let api_key = curseforge_api_key()?;
     let client = reqwest::Client::new();
     let mut headers = HeaderMap::new();
@@ -672,6 +691,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     let (loader, loader_build) = if let Some(id) = loader_entry { loader_from_id(id)? } else { ("vanilla".into(), String::new()) };
     let folder = instance_folder(&name)?;
     std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    std::fs::write(folder.join(".nova-installing"),b"installing").map_err(|e|format!("Could not mark the modpack installation: {e}"))?;
     let pack_files = manifest["files"].as_array().ok_or("CurseForge manifest has no files list.")?;
     let total_files = pack_files.iter().filter(|item| item["required"].as_bool() != Some(false)).count() as u64;
     let mut completed_files = 0u64;
@@ -712,8 +732,18 @@ fn list_instances() -> Result<Value,String> {
     for entry in std::fs::read_dir(&root).map_err(|e|format!("Could not scan installed instances: {e}"))? {
         let entry=entry.map_err(|e|format!("Could not read an instance folder: {e}"))?;
         if !entry.file_type().map_err(|e|format!("Could not inspect an instance folder: {e}"))?.is_dir(){continue;}
-        let path=entry.path().join("nova-instance.json");
+        let folder=entry.path();
+        let marker=folder.join(".nova-installing");
+        let path=folder.join("nova-instance.json");
+        if marker.exists()&&!path.exists(){
+            let stale=std::fs::metadata(&marker).and_then(|m|m.modified()).ok()
+                .and_then(|time|SystemTime::now().duration_since(time).ok())
+                .is_some_and(|age|age>Duration::from_secs(24*60*60));
+            if stale { let _=std::fs::remove_dir_all(&folder); }
+            continue;
+        }
         if !path.is_file(){continue;}
+        if marker.exists(){let _=std::fs::remove_file(&marker);}
         if let Ok(bytes)=std::fs::read(path){if let Ok(metadata)=serde_json::from_slice::<Value>(&bytes){found.push(metadata);}}
     }
     Ok(Value::Array(found))
@@ -750,6 +780,7 @@ fn create_instance(instance_name: String, display_name: String, version: String,
 #[tauri::command]
 fn delete_instance(instance_name: String) -> Result<(), String> {
     let key=safe_instance_name(&instance_name)?;
+    if active_installs().lock().map_err(|_|"The install registry is unavailable.".to_string())?.contains(&key) { return Err("Wait for this instance's installation to finish before deleting it.".into()); }
     if active_instances().lock().map_err(|_|"The game process registry is unavailable.".to_string())?.contains(&key) {
         return Err("Close Minecraft before deleting this running instance.".into());
     }
