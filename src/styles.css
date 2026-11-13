@@ -148,3 +148,26 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .install-progress-steps > div.complete > span { border-color:rgba(85,217,158,.45); background:rgba(85,217,158,.12); color:#55d99e; }
 .install-progress-error { margin-top:14px; padding:12px; border-radius:10px; background:rgba(255,100,100,.08); border:1px solid rgba(255,100,100,.2); color:#ffaaaa; font-size:12px; line-height:1.5; overflow-wrap:anywhere; }
 @media(max-width:520px) { .install-progress-steps { grid-template-columns:1fr; } }
+
+
+/* Non-blocking background download notification */
+.nova-download-toast{position:fixed;z-index:1200;top:18px;right:22px;width:min(360px,calc(100vw - 36px));padding:14px 15px 12px;border:1px solid rgba(165,138,255,.28);border-radius:13px;background:linear-gradient(145deg,rgba(27,29,45,.97),rgba(15,20,32,.97));box-shadow:0 16px 48px rgba(0,0,0,.48);backdrop-filter:blur(18px);color:#f5f2ff;animation:nova-toast-in .2s ease-out}
+@keyframes nova-toast-in{from{opacity:0;transform:translateY(-8px)}to{opacity:1;transform:translateY(0)}}
+.nova-download-toast-head{display:flex;align-items:center;gap:10px}
+.nova-download-toast-icon{display:grid;place-items:center;flex:0 0 34px;width:34px;height:34px;border-radius:10px;background:rgba(139,123,255,.16);color:#b7adff}
+.nova-download-toast-icon.complete{background:rgba(69,201,143,.14);color:#55d99e}
+.nova-download-toast-icon.failed{background:rgba(255,100,100,.14);color:#ff8b8b}
+.nova-download-toast-heading{display:flex;flex:1;min-width:0;flex-direction:column;gap:3px}
+.nova-download-toast-heading b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;font-weight:700}
+.nova-download-toast-heading span{color:#a8aec2;font-size:10px}
+.nova-download-toast-close{display:grid;place-items:center;width:27px;height:27px;border:0;border-radius:7px;background:transparent;color:#9299ad;cursor:pointer}
+.nova-download-toast-close:hover{background:rgba(255,255,255,.08);color:#fff}
+.nova-download-toast-track{height:5px;margin:13px 0 8px;overflow:hidden;border-radius:99px;background:rgba(255,255,255,.1)}
+.nova-download-toast-fill{height:100%;border-radius:inherit;background:linear-gradient(90deg,#8b7bff,#61d5d0);transition:width .35s ease}
+.nova-download-toast-fill.active{background-size:200% 100%;animation:nova-progress-shimmer 1.5s linear infinite}
+.nova-download-toast-fill.failed{background:#ff7777}
+.nova-download-toast-foot{display:flex;align-items:center;justify-content:space-between;color:#9098ad;font-size:10px;font-variant-numeric:tabular-nums}
+.nova-download-toast-foot button{padding:2px 0;border:0;background:none;color:#c4baff;font-size:10px;cursor:pointer}
+.nova-download-toast-details{margin-top:10px;padding-top:9px;border-top:1px solid rgba(255,255,255,.08);color:#aab0c2;font-size:10px;line-height:1.55;overflow-wrap:anywhere}
+.nova-download-toast-details p{margin:7px 0 0;color:#ffaaaa}
+@media(max-width:520px){.nova-download-toast{top:10px;right:10px;width:calc(100vw - 20px)}}
