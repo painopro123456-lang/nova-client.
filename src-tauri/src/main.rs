@@ -272,11 +272,8 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
         options.loader.build = loader_build.clone();
         options.loader.enable = true;
     }
-    let memory_mb = memory_mb.unwrap_or(4096);
-    if !(1024..=16384).contains(&memory_mb) {
-        return Err("Memory allocation must be between 1024 MB and 16384 MB.".into());
-    }
-    options.memory.max = format!("{memory_mb}M");
+    // Modpack preparation installs files only; RAM allocation is applied when the
+    // user launches the instance.
     options.download_concurrency = 8;
 
     let launch = Launch::new(options, account)
