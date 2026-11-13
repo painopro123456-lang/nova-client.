@@ -38,6 +38,7 @@ async fn refresh_saved_minecraft_account(saved_account: &Account) -> Result<Acco
 const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 const MAX_ARCHIVE_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_PACK_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 static ACTIVE_LAUNCHES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
@@ -443,8 +444,23 @@ fn safe_instance_name(input: &str) -> Result<String, String> {
 fn safe_relative_path(input: &str) -> Result<PathBuf, String> {
     let normalized = input.replace('\\', "/");
     let path = Path::new(&normalized);
-    if path.is_absolute() || path.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+    if path.is_absolute() || path.components().any(|component| !matches!(component, Component::Normal(_) | Component::CurDir)) {
         return Err(format!("The pack contains an unsafe file path: {input}"));
+    }
+    for component in path.components() {
+        let Component::Normal(part) = component else { continue };
+        let Some(part) = part.to_str() else {
+            return Err(format!("The pack contains a non-Unicode Windows file path: {input}"));
+        };
+        if part.chars().any(|c| c.is_control() || "<>:\"|?*".contains(c))
+            || part.ends_with('.') || part.ends_with(' ')
+        {
+            return Err(format!("The pack contains a Windows-invalid file path: {input}"));
+        }
+        let stem = part.split('.').next().unwrap_or("").trim_end_matches([' ', '.']).to_ascii_uppercase();
+        if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9") {
+            return Err(format!("The pack contains a reserved Windows device filename: {input}"));
+        }
     }
     Ok(path.to_path_buf())
 }
@@ -896,9 +912,14 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
         .map_err(|e| format!("Could not open downloaded Modrinth archive: {e}"))?)
         .map_err(|e| format!("The Modrinth pack is not a valid ZIP archive: {e}"))?;
     let mut index_bytes = Vec::new();
-    archive.by_name("modrinth.index.json")
-        .map_err(|_| "This Modrinth archive is missing modrinth.index.json.".to_string())?
-        .read_to_end(&mut index_bytes).map_err(|e| format!("Could not read Modrinth manifest: {e}"))?;
+    let mut index_entry = archive.by_name("modrinth.index.json")
+        .map_err(|_| "This Modrinth archive is missing modrinth.index.json.".to_string())?;
+    if index_entry.size() > MAX_PACK_MANIFEST_BYTES {
+        return Err("The Modrinth manifest exceeds NOVA's 16 MiB safety limit.".into());
+    }
+    index_entry.read_to_end(&mut index_bytes)
+        .map_err(|e| format!("Could not read Modrinth manifest: {e}"))?;
+    drop(index_entry);
     let index: Value = serde_json::from_slice(&index_bytes)
         .map_err(|e| format!("Modrinth manifest is invalid: {e}"))?;
     drop(archive);
@@ -921,12 +942,16 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
         let relative = safe_relative_path(item["path"].as_str().ok_or("A Modrinth file path is missing.")?)?;
         let urls = item["downloads"].as_array().ok_or("A Modrinth file has no download URLs.")?;
         if urls.is_empty() { return Err("A Modrinth file has no download URLs.".into()); }
-        let size = item["fileSize"].as_u64();
-        let sha1 = item["hashes"]["sha1"].as_str();
+        let size = item["fileSize"].as_u64()
+            .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+            .ok_or_else(|| format!("Modrinth file {} has missing or invalid size metadata.", i + 1))?;
+        let sha1 = item["hashes"]["sha1"].as_str()
+            .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+            .ok_or_else(|| format!("Modrinth file {} has missing or invalid SHA-1 metadata.", i + 1))?;
         let mut last_error = None;
         let mut downloaded = false;
         for candidate in urls.iter().filter_map(Value::as_str) {
-            match download_pack_file(&app, candidate, &folder.join(relative.clone()), size, sha1).await {
+            match download_pack_file(&app, candidate, &folder.join(relative.clone()), Some(size), Some(sha1)).await {
                 Ok(()) => { downloaded = true; break; }
                 Err(error) => last_error = Some(error),
             }
@@ -1029,8 +1054,14 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         .map_err(|e| format!("Could not open downloaded CurseForge archive: {e}"))?)
         .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
     let mut manifest_bytes = Vec::new();
-    archive.by_name("manifest.json").map_err(|_| "This CurseForge archive is missing manifest.json.".to_string())?
-        .read_to_end(&mut manifest_bytes).map_err(|e| format!("Could not read CurseForge manifest: {e}"))?;
+    let mut manifest_entry = archive.by_name("manifest.json")
+        .map_err(|_| "This CurseForge archive is missing manifest.json.".to_string())?;
+    if manifest_entry.size() > MAX_PACK_MANIFEST_BYTES {
+        return Err("The CurseForge manifest exceeds NOVA's 16 MiB safety limit.".into());
+    }
+    manifest_entry.read_to_end(&mut manifest_bytes)
+        .map_err(|e| format!("Could not read CurseForge manifest: {e}"))?;
+    drop(manifest_entry);
     let manifest: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|e| format!("CurseForge manifest is invalid: {e}"))?;
     drop(archive);
@@ -1262,6 +1293,16 @@ mod tests {
     #[test]
     fn relative_paths_accept_normal_mod_paths() {
         assert!(safe_relative_path("mods/example.jar").is_ok());
+    }
+
+    #[test]
+    fn relative_paths_reject_windows_special_names_and_streams() {
+        assert!(safe_relative_path("mods/CON.jar").is_err());
+        assert!(safe_relative_path("mods/NUL").is_err());
+        assert!(safe_relative_path("mods/example.jar:payload").is_err());
+        assert!(safe_relative_path("mods/trailing.").is_err());
+        assert!(safe_relative_path("mods/trailing ").is_err());
+        assert!(safe_relative_path("mods/bad?.jar").is_err());
     }
 }
 
