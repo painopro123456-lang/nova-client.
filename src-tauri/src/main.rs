@@ -1606,8 +1606,14 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         let destination = mods_folder.join(&filename);
         let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
         let staging = mods_folder.join(format!(".{filename}.{}.{sequence}.partial", std::process::id()));
-        download_pack_file_with_curseforge_key(&app, &url, &staging, Some(expected_size), Some(expected_sha1), Some(&api_key)).await
-            .map_err(|e| format!("Could not save CurseForge mod {}: {e}", i+1))?;
+        // A Modrinth CDN URL must use the unauthenticated public-download client;
+        // the authenticated CurseForge client intentionally rejects non-CurseForge redirects.
+        let download_key = reqwest::Url::parse(&url).ok()
+            .and_then(|parsed| parsed.host_str().map(str::to_owned))
+            .filter(|host| host == "edge.forgecdn.net" || host == "mediafilez.forgecdn.net")
+            .map(|_| api_key.as_str());
+        download_pack_file_with_curseforge_key(&app, &url, &staging, Some(expected_size), Some(expected_sha1), download_key).await
+            .map_err(|e| format!("Could not save verified mod {}: {e}", i+1))?;
         let jar_check = std::fs::File::open(&staging)
             .map_err(|e| format!("Could not verify CurseForge mod {}: {e}", i+1))
             .and_then(|file| ZipArchive::new(file).map(|_| ()).map_err(|e| format!("CurseForge mod {} is not a valid JAR archive: {e}", i+1)));
