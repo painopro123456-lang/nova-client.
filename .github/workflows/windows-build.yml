@@ -21,10 +21,15 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - name: Clone source to a Windows-safe path
+      - name: Fetch the exact triggering commit to a Windows-safe path
         shell: pwsh
         working-directory: D:/a
-        run: git clone --depth 1 https://github.com/painopro123456-lang/nova-client..git nova-src
+        run: |
+          git init nova-src
+          Set-Location nova-src
+          git remote add origin https://github.com/painopro123456-lang/nova-client..git
+          git fetch --depth 1 origin "${{ github.sha }}"
+          git checkout --detach FETCH_HEAD
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
