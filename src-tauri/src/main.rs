@@ -19,6 +19,97 @@ const MINECRAFT_ACCOUNT_USER: &str = "minecraft-account";
 const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
 const MICROSOFT_CLIENT_ID: &str = "09e6a2a2-90ee-47a6-92c4-f8810958de91";
 
+const NOVA_RELEASES_API: &str = "https://api.github.com/repos/painopro123456-lang/nova-client./releases/latest";
+const NOVA_INSTALLER_ASSET: &str = "NOVA-Client-Setup.exe";
+const MAX_UPDATER_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    let parse = |value: &str| -> Option<Vec<u64>> {
+        value.trim_start_matches('v').split('.').map(|part| part.parse::<u64>().ok()).collect()
+    };
+    match (parse(latest), parse(current)) {
+        (Some(latest), Some(current)) => {
+            let length = latest.len().max(current.len());
+            (0..length).map(|i| *latest.get(i).unwrap_or(&0))
+                .cmp((0..length).map(|i| *current.get(i).unwrap_or(&0))).is_gt()
+        }
+        _ => false,
+    }
+}
+
+async fn latest_nova_release() -> Result<Value, String> {
+    let client = http_client()?;
+    let response = client.get(NOVA_RELEASES_API)
+        .header("User-Agent", "NOVA-Client-Updater")
+        .header(ACCEPT, "application/vnd.github+json")
+        .send().await.map_err(|e| format!("Could not check NOVA updates: {e}"))?
+        .error_for_status().map_err(|e| format!("GitHub could not provide the latest NOVA release: {e}"))?;
+    response.json::<Value>().await.map_err(|e| format!("GitHub returned invalid update information: {e}"))
+}
+
+fn release_installer_url(release: &Value) -> Result<String, String> {
+    let assets = release["assets"].as_array().ok_or("The latest NOVA release has no installer assets.")?;
+    let asset = assets.iter().find(|asset| asset["name"].as_str() == Some(NOVA_INSTALLER_ASSET))
+        .ok_or("The latest NOVA release is missing NOVA-Client-Setup.exe.")?;
+    let size = asset["size"].as_u64().ok_or("The NOVA installer size is missing.")?;
+    if size == 0 || size > MAX_UPDATER_DOWNLOAD_BYTES {
+        return Err("The NOVA installer size is invalid or exceeds the 200 MiB safety limit.".into());
+    }
+    let url = asset["browser_download_url"].as_str().ok_or("The NOVA installer download link is missing.")?;
+    let parsed = reqwest::Url::parse(url).map_err(|_| "The NOVA installer download link is invalid.")?;
+    if parsed.scheme() != "https" || parsed.host_str() != Some("github.com") {
+        return Err("The NOVA installer link is not a trusted GitHub HTTPS release URL.".into());
+    }
+    Ok(url.to_owned())
+}
+
+#[tauri::command]
+async fn check_for_updates() -> Result<Value, String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let release = latest_nova_release().await?;
+    let latest = release["tag_name"].as_str().ok_or("The latest NOVA release has no version tag.")?
+        .trim_start_matches('v').to_owned();
+    let available = version_is_newer(&latest, current);
+    let download_url = if available { Some(release_installer_url(&release)?) } else { None };
+    Ok(json!({
+        "currentVersion": current,
+        "latestVersion": latest,
+        "available": available,
+        "releaseNotes": release["body"].as_str().unwrap_or("No release notes were provided."),
+        "publishedAt": release["published_at"].as_str().unwrap_or(""),
+        "downloadUrl": download_url
+    }))
+}
+
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    let release = latest_nova_release().await?;
+    let latest = release["tag_name"].as_str().ok_or("The latest NOVA release has no version tag.")?
+        .trim_start_matches('v');
+    if !version_is_newer(latest, env!("CARGO_PKG_VERSION")) {
+        return Err("NOVA is already up to date.".into());
+    }
+    let url = release_installer_url(&release)?;
+    let client = http_client()?;
+    let response = client.get(&url).header("User-Agent", "NOVA-Client-Updater")
+        .send().await.map_err(|e| format!("Could not download the NOVA update: {e}"))?
+        .error_for_status().map_err(|e| format!("The NOVA installer download failed: {e}"))?;
+    if response.content_length().is_some_and(|size| size == 0 || size > MAX_UPDATER_DOWNLOAD_BYTES) {
+        return Err("The downloaded NOVA installer has an invalid size.".into());
+    }
+    let bytes = response.bytes().await.map_err(|e| format!("Could not read the NOVA installer: {e}"))?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_UPDATER_DOWNLOAD_BYTES {
+        return Err("The downloaded NOVA installer is empty or exceeds the 200 MiB safety limit.".into());
+    }
+    let installer = std::env::temp_dir().join(format!("NOVA-Client-Update-{}.exe", std::process::id()));
+    std::fs::write(&installer, &bytes).map_err(|e| format!("Could not save the NOVA installer: {e}"))?;
+    std::process::Command::new(&installer).spawn()
+        .map_err(|e| format!("Could not start the NOVA installer: {e}"))?;
+    tokio::time::sleep(Duration::from_millis(900)).await;
+    app.exit(0);
+    Ok(())
+}
+
 static AUTH_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn refresh_saved_minecraft_account(saved_account: &Account) -> Result<Account, String> {
@@ -1325,6 +1416,15 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn updater_compares_release_versions_numerically() {
+        assert!(super::version_is_newer("0.1.1", "0.1.0"));
+        assert!(super::version_is_newer("1.0.0", "0.9.99"));
+        assert!(!super::version_is_newer("0.1.0", "0.1.0"));
+        assert!(!super::version_is_newer("0.1.0", "0.1.1"));
+        assert!(super::version_is_newer("v0.2.0", "0.1.9"));
+    }
+
+    #[test]
     fn modrinth_minecraft_version_prefers_manifest_dependency() {
         let index = json!({"dependencies":{"minecraft":{"version":"1.21.1"}}});
         let version = json!({"game_versions":["1.20.1"]});
@@ -1425,6 +1525,8 @@ fn main() {
             begin_microsoft_login,
             minecraft_account_name,
             sign_out_minecraft,
+            check_for_updates,
+            install_update,
             minecraft_versions,
             launch_minecraft,
             prepare_modpack_instance,
