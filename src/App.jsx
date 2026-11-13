@@ -253,6 +253,8 @@ function LocalInstances({ versions, memoryMb }) {
   const [packs,setPacks]=useState(()=>{try{const value=JSON.parse(localStorage.getItem("nova.installedPacks")||"{}");return value&&typeof value==="object"&&!Array.isArray(value)?value:{}}catch{return{}}});
   const [name,setName]=useState("");
   const [version,setVersion]=useState("");
+  const [versionSearch,setVersionSearch]=useState("");
+  const [versionFilter,setVersionFilter]=useState("release");
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
   useEffect(()=>{
@@ -271,6 +273,8 @@ function LocalInstances({ versions, memoryMb }) {
     return()=>{alive=false;};
   },[]);
   useEffect(()=>{if(!version && versions.length) setVersion(versions.find(v=>v.type==="release")?.id || versions[0].id);},[versions,version]);
+  const visibleVersions=versions.filter(v=>(versionFilter==="all"||v.type===versionFilter)&&v.id.toLowerCase().includes(versionSearch.trim().toLowerCase())).slice(0,300);
+  const selectedVersionVisible=visibleVersions.some(v=>v.id===version);
   useEffect(()=>{try{localStorage.setItem("nova.instances",JSON.stringify(items))}catch(e){setAction("Could not save instance list in browser storage: "+(e.message||e))}},[items]);
   const add=async()=>{if(!name.trim()||!version)return;const instanceName=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);setAction("Creating instance "+name.trim()+"…");try{const metadata=await invoke("create_instance",{instanceName,displayName:name.trim(),version,loader});setItems(a=>[...a,{id:Date.now(),...metadata}]);setName("");setAction((metadata.name||name.trim())+" created. Press Install & Play to install Minecraft and its loader.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not create this instance."));}};
   const playPack=async pack=>{setAction("Installing Minecraft and loader for "+pack.name+" (if needed), then launching…");try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName,memoryMb});setAction(pack.name+" started.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}};
@@ -278,7 +282,21 @@ function LocalInstances({ versions, memoryMb }) {
   const installedPacks=Object.entries(packs);
   return <section className="local-instances"><div className="eyebrow">LOCAL PROFILES</div><h2>Your instances</h2><p>Each modpack gets its own isolated folder. NOVA installs the pack files, Minecraft, Java and the matching loader before marking the instance ready.</p>
     {installedPacks.length>0&&<><div className="section-heading"><div><div className="eyebrow">INSTALLED MODPACKS</div><h2>Your library</h2></div></div>{installedPacks.map(([id,pack])=><div className="instance-entry" key={id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{pack.name}</b><span>Minecraft {pack.minecraftVersion} · {pack.loader}{pack.loaderVersion?" "+pack.loaderVersion:""} · {pack.source}</span></div><button className="primary-btn" onClick={()=>playPack(pack)}><Play size={13} fill="currentColor"/> Play</button><button className="delete-entry" onClick={()=>removePack(id,pack)}>Delete</button></div>)}</>}
-    <div className="section-heading"><div><div className="eyebrow">CUSTOM PROFILES</div><h2>Organize versions</h2></div></div><div className="instance-create"><input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Instance name"/><select value={version} onChange={e=>setVersion(e.target.value)} disabled={!version||versions.length===0}>{versions.map(v=><option key={v.id} value={v.id}>{v.id}{v.type==="snapshot"?" · Snapshot":""}</option>)}</select><select value={loader} onChange={e=>setLoader(e.target.value)}><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="quilt">Quilt</option><option value="vanilla">Vanilla</option></select><button className="primary-btn" onClick={add} disabled={!name.trim()||!version}><Plus size={14}/> Create instance</button></div>{items.length===0?<div className="catalog-note">No custom profiles yet.</div>:items.map(x=><div className="instance-entry" key={x.id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{x.name}</b><span>Minecraft {x.minecraftVersion||x.version} · {x.loader||"vanilla"} · isolated instance</span></div><button className="primary-btn" onClick={()=>playPack(x)}>Install & Play</button><button className="delete-entry" onClick={()=>removePack(x.id,x)}>Delete</button></div>)}
+    <div className="section-heading"><div><div className="eyebrow">CUSTOM PROFILES</div><h2>Minecraft version manager</h2><p>Search releases and snapshots, then create an isolated profile with the loader you want.</p></div></div>
+    <div className="instance-create">
+      <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Instance name"/>
+      <input value={versionSearch} onChange={e=>setVersionSearch(e.target.value)} placeholder="Search versions (e.g. 1.21.4)"/>
+      <select value={versionFilter} onChange={e=>{const nextFilter=e.target.value;setVersionFilter(nextFilter);const next=versions.find(v=>(nextFilter==="all"||v.type===nextFilter)&&v.id.toLowerCase().includes(versionSearch.trim().toLowerCase()));if(next)setVersion(next.id);}}>
+        <option value="release">Releases</option><option value="snapshot">Snapshots</option><option value="all">All versions</option>
+      </select>
+      <select value={selectedVersionVisible?version:""} onChange={e=>setVersion(e.target.value)} disabled={versions.length===0||visibleVersions.length===0}>
+        <option value="" disabled>{versions.length===0?"Loading versions…":visibleVersions.length===0?"No matching versions":"Choose a Minecraft version"}</option>
+        {visibleVersions.map(v=><option key={v.id} value={v.id}>{v.id}{v.type==="snapshot"?" · Snapshot":""}</option>)}
+      </select>
+      <select value={loader} onChange={e=>setLoader(e.target.value)}><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="quilt">Quilt</option><option value="vanilla">Vanilla</option></select>
+      <button className="primary-btn" onClick={add} disabled={!name.trim()||!selectedVersionVisible}><Plus size={14}/> Create instance</button>
+    </div>
+    <div className="catalog-note">Showing {visibleVersions.length} of {versions.length} Minecraft versions. Selected: {selectedVersionVisible?version:"none"}.</div>{items.length===0?<div className="catalog-note">No custom profiles yet.</div>:items.map(x=><div className="instance-entry" key={x.id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{x.name}</b><span>Minecraft {x.minecraftVersion||x.version} · {x.loader||"vanilla"} · isolated instance</span></div><button className="primary-btn" onClick={()=>playPack(x)}>Install & Play</button><button className="delete-entry" onClick={()=>removePack(x.id,x)}>Delete</button></div>)}
     {action&&<div className="catalog-note">{action}</div>}
   </section>;
 }
@@ -458,6 +476,7 @@ export default function App() {
           setMessage(result.success
             ? "Minecraft has closed."
             : "Minecraft exited unexpectedly. Check the game log for the crash details.");
+          refreshGameLogs();
         }
       });
       if (alive) offGameExit = stopGameExit; else stopGameExit();
@@ -481,7 +500,7 @@ export default function App() {
     setLaunching(true); setMessage(`Preparing Minecraft ${selectedVersion} (${loaderType}). The first launch downloads game files and Java runtime.`);
     try { await invoke("launch_minecraft", { version: selectedVersion, loader: loaderType, memoryMb }); setMessage("Minecraft has been started. Keep NOVA open while the game loads."); }
     catch (error) { setMessage(typeof error === "string" ? error : (error.message || "Minecraft could not be started.")); }
-    finally { setLaunching(false); }
+    finally { setLaunching(false); refreshGameLogs(); }
   };
   const titles = { home: ["Overview", "Everything you need, in one place."], instances: ["Instances", "Your game versions, neatly organized."], mods: ["Mods", "Build the Minecraft setup you want."], modpacks: ["Modpacks", "Discover a new way to play."], pvp: ["PvP features", "A focused toolkit for competitive play."], settings: ["Settings", "Make NOVA feel like yours."] };
   const [title, subtitle] = titles[page] || titles.home;
