@@ -258,3 +258,22 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .custom-dialog-footer .primary-btn{min-width:150px;justify-content:center}
 @media(max-width:760px){.instance-grid{grid-template-columns:1fr}.instances-topline{align-items:flex-start;flex-direction:column}.custom-instance-dialog{max-height:94vh}.custom-version-list{grid-template-columns:1fr}}
 @media(max-width:520px){.custom-instance-backdrop{padding:8px}.custom-dialog-top,.custom-form-grid{padding-left:16px;padding-right:16px}.custom-version-head,.custom-version-tools{padding-left:16px;padding-right:16px}.custom-version-list{padding-left:16px;padding-right:16px}.custom-dialog-footer{padding-left:16px;padding-right:16px}.custom-form-grid{grid-template-columns:1fr}.custom-version-tools{align-items:stretch;flex-direction:column}}
+
+
+/* Colored, timestamped diagnostic log viewer */
+.nova-log-viewer{width:100%;overflow:auto;border:1px solid #ffffff12;border-radius:10px;background:#080b12;padding:8px 0;font-family:"Cascadia Code","Consolas",ui-monospace,monospace;font-size:10px;line-height:1.65}
+.nova-log-row{display:grid;grid-template-columns:82px 54px minmax(0,1fr);align-items:start;gap:9px;padding:3px 11px;border-bottom:1px solid #ffffff06}
+.nova-log-row:hover{background:#ffffff07}
+.nova-log-time{color:#858ba0;white-space:nowrap;font-variant-numeric:tabular-nums}
+.nova-log-level{font-weight:800;letter-spacing:.5px;color:#9da5b8}
+.nova-log-message{color:#d0d3df;overflow-wrap:anywhere;white-space:pre-wrap}
+.nova-log-row.level-info .nova-log-level{color:#69baff}
+.nova-log-row.level-info .nova-log-level:before{content:"● ";font-size:8px}
+.nova-log-row.level-warn{background:#f0b84b08}
+.nova-log-row.level-warn .nova-log-level{color:#f2bd59}
+.nova-log-row.level-warn .nova-log-level:before{content:"▲ ";font-size:8px}
+.nova-log-row.level-error{background:#f05c6b0b}
+.nova-log-row.level-error .nova-log-level{color:#ff7785}
+.nova-log-row.level-error .nova-log-level:before{content:"● ";font-size:8px}
+.nova-log-row.level-error .nova-log-message{color:#ffd1d5}
+.nova-log-empty{padding:18px;text-align:center;color:var(--muted);font-family:Inter,ui-sans-serif,system-ui;font-size:11px}
