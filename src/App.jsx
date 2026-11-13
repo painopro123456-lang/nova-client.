@@ -415,6 +415,20 @@ function LogViewer({ text: raw, maxHeight=260 }) {
 }
 
 function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateError, onCheckUpdates, onInstallUpdate }) {
+  const [deleteBusy,setDeleteBusy]=useState(false);
+  const [deleteError,setDeleteError]=useState("");
+  const deleteApplicationData=async()=>{
+    if(!window.confirm("Delete ALL NOVA Client application data? This removes installed modpacks, Minecraft files, saved account data, logs, and local launcher settings. This cannot be undone."))return;
+    setDeleteBusy(true);setDeleteError("");
+    try{
+      await invoke("delete_application_data");
+      localStorage.clear();
+      window.location.reload();
+    }catch(error){
+      setDeleteError(typeof error==="string"?error:(error.message||"Could not delete NOVA application data."));
+      setDeleteBusy(false);
+    }
+  };
   return <section className="local-instances">
     <div className="eyebrow">NOVA PREFERENCES</div><h2>Launcher settings</h2>
     <p>Choose how much memory NOVA gives Minecraft when it launches. The setting is saved on this PC.</p>
@@ -437,6 +451,15 @@ function SettingsPage({ memoryMb, setMemoryMb, updateInfo, updateBusy, updateErr
         {updateInfo?.available && <button className="primary-btn" onClick={onInstallUpdate} disabled={updateBusy}><ArrowDownToLine size={14}/>{updateBusy?"Preparing update…":"Accept & restart"}</button>}
       </div>
       <span className="feature-status">{updateInfo ? "CURRENT VERSION "+updateInfo.currentVersion : "UPDATE STATUS NOT CHECKED"}</span>
+    </div>
+    <div className="section-heading"><div><div className="eyebrow">LOCAL STORAGE</div><h2>Application data</h2></div></div>
+    <div className="feature-card">
+      <b>Delete application data</b>
+      <p>Permanently removes downloaded modpacks, Minecraft files, saved sign-in data, logs, and NOVA's local settings from this PC. The NOVA app itself stays installed.</p>
+      {deleteError&&<div className="catalog-note error" role="alert">{deleteError}</div>}
+      <button className="secondary-btn" onClick={deleteApplicationData} disabled={deleteBusy} style={{borderColor:"rgba(239,92,92,.55)",color:"#ff8b8b"}}>
+        {deleteBusy?"Deleting application data…":"Delete application data"}
+      </button>
     </div>
   </section>;
 }
