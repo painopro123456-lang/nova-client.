@@ -1031,7 +1031,7 @@ async fn install_mod_to_instance_inner(
     let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let staging = mods_folder.join(format!(".{safe_filename}.{}.{}.installing", std::process::id(), sequence));
     emit_pack_progress(&app, "files", 0, 0, "Downloading selected mod");
-    download_pack_file(&app, &download_url, &staging, expected_size, expected_sha1.as_deref()).await?;
+    download_pack_file(&app, &download_url, &staging, Some(expected_size), Some(&expected_sha1)).await?;
     let jar_check = std::fs::File::open(&staging)
         .map_err(|e| format!("Could not verify downloaded mod archive: {e}"))
         .and_then(|file| ZipArchive::new(file).map(|_| ()).map_err(|e| format!("The downloaded file is not a valid JAR archive: {e}")));
