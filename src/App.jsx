@@ -247,6 +247,21 @@ function LocalInstances({ versions }) {
   const [version,setVersion]=useState("");
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
+  useEffect(()=>{
+    let alive=true;
+    invoke("list_instances").then(found=>{
+      if(!alive || !Array.isArray(found)) return;
+      const custom=found.filter(x=>x.source==="custom").map(x=>({...x,id:x.instanceName}));
+      const packs=Object.fromEntries(found
+        .filter(x=>(x.source==="modrinth"||x.source==="curseforge")&&x.projectId)
+        .map(x=>[x.source+":"+String(x.projectId),x]));
+      setItems(custom);
+      setPacks(packs);
+    }).catch(error=>{
+      if(alive) setAction(typeof error==="string"?error:(error.message||"Could not recover installed instances from disk."));
+    });
+    return()=>{alive=false;};
+  },[]);
   useEffect(()=>{if(!version && versions.length) setVersion(versions.find(v=>v.type==="release")?.id || versions[0].id);},[versions,version]);
   useEffect(()=>{try{localStorage.setItem("nova.instances",JSON.stringify(items))}catch(e){setAction("Could not save instance list in browser storage: "+(e.message||e))}},[items]);
   const add=async()=>{if(!name.trim()||!version)return;const instanceName=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);setAction("Creating instance "+name.trim()+"…");try{const metadata=await invoke("create_instance",{instanceName,displayName:name.trim(),version,loader});setItems(a=>[...a,{id:Date.now(),...metadata}]);setName("");setAction((metadata.name||name.trim())+" created. Press Install & Play to install Minecraft and its loader.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not create this instance."));}};
