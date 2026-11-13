@@ -26,19 +26,23 @@ const MAX_EXTRACTED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 static ACTIVE_INSTANCES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static ACTIVE_INSTALLS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+static CANCELLED_INSTALLS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 static AUTH_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 fn active_instances() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTANCES.get_or_init(|| Mutex::new(HashSet::new())) }
 fn active_installs() -> &'static Mutex<HashSet<String>> { ACTIVE_INSTALLS.get_or_init(|| Mutex::new(HashSet::new())) }
+fn cancelled_installs() -> &'static Mutex<HashSet<String>> { CANCELLED_INSTALLS.get_or_init(|| Mutex::new(HashSet::new())) }
+fn is_install_cancelled(name:&str)->bool { cancelled_installs().lock().map(|set|set.contains(name)).unwrap_or(false) }
 struct InstallGuard { name: String }
 impl InstallGuard {
     fn acquire(name: String) -> Result<Self,String> {
         let mut active=active_installs().lock().map_err(|_|"The install registry is unavailable.".to_string())?;
         if !active.insert(name.clone()) { return Err("This instance is already being installed or prepared.".into()); }
+        if let Ok(mut cancelled)=cancelled_installs().lock(){cancelled.remove(&name);}
         Ok(Self{name})
     }
 }
 impl Drop for InstallGuard {
-    fn drop(&mut self) { if let Ok(mut active)=active_installs().lock(){active.remove(&self.name);} }
+    fn drop(&mut self) { if let Ok(mut active)=active_installs().lock(){active.remove(&self.name);} if let Ok(mut cancelled)=cancelled_installs().lock(){cancelled.remove(&self.name);} }
 }
 fn http_client() -> Result<reqwest::Client,String> {
     reqwest::Client::builder().connect_timeout(Duration::from_secs(15)).timeout(Duration::from_secs(180))
@@ -459,13 +463,14 @@ fn instance_folder(instance_name: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(local).join("NOVA Client").join("minecraft").join("instances").join(safe_instance_name(instance_name)?))
 }
 
-fn extract_pack_overrides(archive_path:&Path,prefix:&str,destination:&Path)->Result<(),String>{
+fn extract_pack_overrides(archive_path:&Path,prefix:&str,destination:&Path,instance_name:&str)->Result<(),String>{
     let archive_file=File::open(archive_path).map_err(|e|format!("Could not open modpack archive: {e}"))?;
     let mut archive=ZipArchive::new(archive_file)
         .map_err(|e| format!("The modpack archive is invalid: {e}"))?;
     if archive.len() > MAX_ARCHIVE_ENTRIES { return Err("The modpack archive contains too many files and was blocked for safety.".into()); }
     let mut extracted_total=0u64;
     for index in 0..archive.len() {
+        if is_install_cancelled(instance_name){return Err("Modpack installation cancelled.".into());}
         let mut entry = archive.by_index(index)
             .map_err(|e| format!("Could not read modpack archive entry: {e}"))?;
         let entry_name = entry.name().replace('\\', "/");
@@ -510,20 +515,30 @@ fn write_atomic(destination:&Path,bytes:&[u8])->Result<(),String>{
     std::fs::rename(&temp,destination).map_err(|e|{let _=std::fs::remove_file(&temp);format!("Could not finalize downloaded file: {e}")})
 }
 
-async fn download_to_file(url:&str,destination:&Path,app:&tauri::AppHandle,phase:&str,detail:&str,expected_size:Option<u64>,expected_sha1:Option<&str>)->Result<(),String>{
+async fn download_to_file(url:&str,destination:&Path,app:&tauri::AppHandle,instance_name:&str,phase:&str,detail:&str,expected_size:Option<u64>,expected_sha1:Option<&str>)->Result<(),String>{
     if !url.starts_with("https://"){return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());}
     if let Some(parent)=destination.parent(){std::fs::create_dir_all(parent).map_err(|e|format!("Could not create download folder: {e}"))?;}
     let response=http_client()?.get(url).send().await.map_err(|e|format!("Download failed: {e}"))?
         .error_for_status().map_err(|e|format!("Download server returned an error: {e}"))?;
     let total=response.content_length().or(expected_size);
     if total.is_some_and(|size|size>MAX_ARCHIVE_BYTES as u64){return Err("The download is larger than NOVA's 1 GiB safety limit.".into());}
+    if is_install_cancelled(instance_name){return Err("Modpack installation cancelled.".into());}
     let mut stream=response.bytes_stream();
     let temp=destination.with_extension(format!("nova-{}.part",std::process::id()));
     let mut file=File::create(&temp).map_err(|e|format!("Could not create temporary download: {e}"))?;
     let mut hasher=Sha1::new();
     let mut completed=0u64;
-    while let Some(chunk)=stream.next().await{
+    loop {
+        let next_chunk=tokio::select! {
+            chunk=stream.next()=>chunk,
+            _=tokio::time::sleep(Duration::from_millis(250))=>{
+                if is_install_cancelled(instance_name){drop(file);let _=std::fs::remove_file(&temp);return Err("Modpack installation cancelled.".into());}
+                continue;
+            }
+        };
+        let Some(chunk)=next_chunk else {break;};
         let chunk=match chunk{Ok(chunk)=>chunk,Err(error)=>{drop(file);let _=std::fs::remove_file(&temp);return Err(format!("Download stream failed: {error}"));}};
+        if is_install_cancelled(instance_name){drop(file);let _=std::fs::remove_file(&temp);return Err("Modpack installation cancelled.".into());}
         completed=completed.saturating_add(chunk.len() as u64);
         if completed>MAX_ARCHIVE_BYTES as u64{drop(file);let _=std::fs::remove_file(&temp);return Err("The download is larger than NOVA's 1 GiB safety limit.".into());}
         if let Err(error)=file.write_all(&chunk){drop(file);let _=std::fs::remove_file(&temp);return Err(format!("Could not write download data: {error}"));}
@@ -543,8 +558,8 @@ async fn download_to_file(url:&str,destination:&Path,app:&tauri::AppHandle,phase
     std::fs::rename(&temp,destination).map_err(|e|{let _=std::fs::remove_file(&temp);format!("Could not finalize downloaded file: {e}")})
 }
 
-async fn download_pack_file(app:&tauri::AppHandle,url:&str,destination:&Path,expected_size:Option<u64>,expected_sha1:Option<&str>,detail:&str)->Result<(),String>{
-    download_to_file(url,destination,app,"files",detail,expected_size,expected_sha1).await
+async fn download_pack_file(app:&tauri::AppHandle,instance_name:&str,url:&str,destination:&Path,expected_size:Option<u64>,expected_sha1:Option<&str>,detail:&str)->Result<(),String>{
+    download_to_file(url,destination,app,instance_name,"files",detail,expected_size,expected_sha1).await
 }
 
 fn loader_from_id(id: &str) -> Result<(String, String), String> {
@@ -595,7 +610,7 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     std::fs::write(folder.join(".nova-installing"),b"installing").map_err(|e|format!("Could not mark the modpack installation: {e}"))?;
     let archive_path=folder.join(".modrinth-pack.zip");
     emit_pack_progress(&app,"archive",0,0,"Downloading Modrinth archive");
-    download_to_file(download_url,&archive_path,&app,"archive","Downloading Modrinth archive",archive_size,archive_sha1).await
+    download_to_file(download_url,&archive_path,&app,&name,"archive","Downloading Modrinth archive",archive_size,archive_sha1).await
         .map_err(|e|format!("Modrinth archive integrity check failed: {e}"))?;
     let archive_file=File::open(&archive_path).map_err(|e|format!("Could not open Modrinth archive: {e}"))?;
     let mut archive=ZipArchive::new(archive_file)
@@ -630,13 +645,13 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
         let candidates=urls.iter().filter_map(Value::as_str).collect::<Vec<_>>();
         if candidates.is_empty(){return Err("A Modrinth file has no usable download URL.".into());}
         let size=item["fileSize"].as_u64();let sha1=item["hashes"]["sha1"].as_str();let mut last_error=None;let mut downloaded=false;
-        for url in candidates {match download_pack_file(&app,url,&folder.join(&relative),size,sha1,&format!("Downloading file {} of {}",i+1,pack_files.len())).await{Ok(())=>{downloaded=true;break},Err(error)=>last_error=Some(error)}}
+        for url in candidates {match download_pack_file(&app,&name,url,&folder.join(&relative),size,sha1,&format!("Downloading file {} of {}",i+1,pack_files.len())).await{Ok(())=>{downloaded=true;break},Err(error)=>last_error=Some(error)}}
         if !downloaded{return Err(format!("Mod file {} of {} failed on all available mirrors: {}",i+1,pack_files.len(),last_error.unwrap_or_else(||"No mirror was usable.".into())));}
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
     }
-    extract_pack_overrides(&archive_path,"overrides/",&folder)?;
-    extract_pack_overrides(&archive_path,"client-overrides/",&folder)?;
+    extract_pack_overrides(&archive_path,"overrides/",&folder,&name)?;
+    extract_pack_overrides(&archive_path,"client-overrides/",&folder,&name)?;
     let _=std::fs::remove_file(&archive_path);
     let title = index["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(&name).to_owned();
     save_instance_metadata(&folder, json!({
@@ -723,7 +738,7 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     std::fs::write(folder.join(".nova-installing"),b"installing").map_err(|e|format!("Could not mark the modpack installation: {e}"))?;
     let archive_path=folder.join(".curseforge-pack.zip");
     emit_pack_progress(&app,"archive",0,0,"Downloading CurseForge archive");
-    download_to_file(&manifest_url,&archive_path,&app,"archive","Downloading CurseForge archive",archive_size,archive_sha1).await
+    download_to_file(&manifest_url,&archive_path,&app,&name,"archive","Downloading CurseForge archive",archive_size,archive_sha1).await
         .map_err(|e|format!("CurseForge archive integrity check failed: {e}"))?;
     let archive_file=File::open(&archive_path).map_err(|e|format!("Could not open CurseForge archive: {e}"))?;
     let mut archive=ZipArchive::new(archive_file)
@@ -761,12 +776,12 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         std::fs::create_dir_all(folder.join("mods")).map_err(|e|format!("Could not create mods folder: {e}"))?;
         let expected_size=item["fileLength"].as_u64();
         let expected_sha1=item["hashes"].as_array().and_then(|hashes|hashes.iter().find(|h|h["algo"].as_u64()==Some(1))).and_then(|h|h["value"].as_str());
-        download_pack_file(&app,&url,&folder.join("mods").join(filename),expected_size,expected_sha1,&format!("Downloading mod {} of {}",i+1,pack_files.len())).await
+        download_pack_file(&app,&name,&url,&folder.join("mods").join(filename),expected_size,expected_sha1,&format!("Downloading mod {} of {}",i+1,pack_files.len())).await
             .map_err(|e|format!("Could not verify or save CurseForge mod {}: {e}",i+1))?;
         completed_files += 1;
         emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
     }
-    extract_pack_overrides(&archive_path,"overrides/",&folder)?;
+    extract_pack_overrides(&archive_path,"overrides/",&folder,&name)?;
     let _=std::fs::remove_file(&archive_path);
     let title = manifest["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(&name).to_owned();
     save_instance_metadata(&folder, json!({
@@ -775,6 +790,16 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     }))
 }
 
+
+#[tauri::command]
+fn cancel_modpack_install(instance_name:String)->Result<(),String>{
+    let name=safe_instance_name(&instance_name)?;
+    if !active_installs().lock().map_err(|_|"The install registry is unavailable.".to_string())?.contains(&name){
+        return Err("There is no active installation to cancel.".into());
+    }
+    cancelled_installs().lock().map_err(|_|"The cancellation registry is unavailable.".to_string())?.insert(name);
+    Ok(())
+}
 
 #[tauri::command]
 fn list_instances() -> Result<Value,String> {
@@ -861,6 +886,7 @@ fn main() {
             install_curseforge_modpack,
             create_instance,
             list_instances,
+            cancel_modpack_install,
             delete_instance
         ])
         .run(tauri::generate_context!())

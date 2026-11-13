@@ -149,15 +149,15 @@ function Catalog({ packs, memoryMax }) {
     const instanceName=(project.title.toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,24)||"modpack")+"-"+Date.now().toString(36)+"-"+uniqueSuffix;
     setInstallingId(projectId);
     setVersionProject(null);
-    const initialProgress={name:project.title,step:0,progress:null,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""};
+    const initialProgress={name:project.title,instanceName,step:0,progress:null,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""};
     setInstallDialog(initialProgress); writeStored("nova.activeInstall",initialProgress);
     try{
-      const downloadProgress={name:project.title,step:0,progress:null,status:"Downloading modpack",detail:"Getting the selected release and its manifest…",done:false,error:""};
+      const downloadProgress={name:project.title,instanceName,step:0,progress:null,status:"Downloading modpack",detail:"Getting the selected release and its manifest…",done:false,error:""};
       setInstallDialog(downloadProgress); writeStored("nova.activeInstall",downloadProgress);
       const metadata=provider==="modrinth"
         ? await invoke("install_modrinth_modpack",{projectId,instanceName,versionId:selectedPackVersion})
         : await invoke("install_curseforge_modpack",{modId:projectId,instanceName,fileId:Number(selectedPackVersion)});
-      const preparingProgress={name:metadata.name||project.title,step:1,progress:null,status:"Preparing Minecraft",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""};
+      const preparingProgress={name:metadata.name||project.title,instanceName,step:1,progress:null,status:"Preparing Minecraft",detail:"Installing Minecraft "+metadata.minecraftVersion+" and the Java runtime…",done:false,error:""};
       setInstallDialog(preparingProgress); writeStored("nova.activeInstall",preparingProgress);
       await invoke("prepare_modpack_instance",{instanceName:metadata.instanceName,memoryMax});
       // Only expose a pack as installed after Minecraft and its loader are ready.
@@ -167,7 +167,7 @@ function Catalog({ packs, memoryMax }) {
         try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new working install even if stale cleanup fails. */}
       }
       setInstalled(old=>({...old,[storageKey]:metadata}));
-      const completeProgress={name:metadata.name||project.title,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""};
+      const completeProgress={name:metadata.name||project.title,instanceName,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""};
       setInstallDialog(completeProgress); writeStored("nova.activeInstall",completeProgress);
       setPackActionMessage((metadata.name||project.title)+" is fully installed and ready to play.");
     }catch(e){
@@ -235,6 +235,7 @@ function Catalog({ packs, memoryMax }) {
           <div className={installDialog.step>=2?"complete":""}><span>3</span><label>Ready to play</label></div>
         </div>
         {installDialog.error&&<div className="install-progress-error">{installDialog.error}</div>}
+        {!installDialog.done&&installDialog.step===0&&<div className="pack-version-actions"><button className="secondary-btn" onClick={async()=>{try{await invoke("cancel_modpack_install",{instanceName:installDialog.instanceName});setInstallDialog(current=>({...current,status:"Cancelling installation",detail:"Stopping the current download safely…"}));}catch(error){setInstallDialog(current=>({...current,detail:typeof error==="string"?error:(error.message||"Could not cancel this installation.")}));}}}>Cancel installation</button></div>}
         {installDialog.done&&<div className="pack-version-actions"><button className="primary-btn" onClick={()=>{setInstallDialog(null);writeStored("nova.activeInstall",null);}}>Close</button></div>}
       </section>
     </div>}
