@@ -312,6 +312,8 @@ export default function App() {
   const [gameExit,setGameExit]=useState("");
   useEffect(() => {
     let alive = true;
+    const previousInstall=readStored("nova.activeInstall",null,v=>v&&typeof v==="object");
+    if(previousInstall&&!previousInstall.done)writeStored("nova.activeInstall",{...previousInstall,done:true,error:"The launcher closed before this installation finished.",status:"Installation interrupted",detail:"NOVA will remove abandoned temporary files after they become stale. You can safely retry."});
     invoke("list_instances").then(entries=>{if(!alive||!Array.isArray(entries))return;const custom=entries.filter(x=>x&&x.source==="custom").map(x=>({...x,id:x.instanceName||x.name||Date.now()}));const recoveredPacks={};for(const pack of entries.filter(x=>x&&x.source&&x.source!=="custom"&&x.projectId&&x.instanceName))recoveredPacks[String(pack.source)+":"+String(pack.projectId)]=pack;writeStored("nova.instances",custom);writeStored("nova.installedPacks",recoveredPacks);window.dispatchEvent(new Event("nova-instances-recovered"));}).catch(()=>{});
     invoke("minecraft_versions").then(manifest => {
       const entries = Array.isArray(manifest?.versions) ? manifest.versions.filter(v => typeof v.id === "string" && v.id.trim()).map(v => ({id:v.id,type:v.type || "release"})) : [];
