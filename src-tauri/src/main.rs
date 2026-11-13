@@ -281,7 +281,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
 }
 
 #[tauri::command]
-async fn launch_minecraft(version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>) -> Result<(), String> {
+async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>) -> Result<(), String> {
     let mut version = version.trim().to_owned();
     let mut loader = loader.unwrap_or_else(|| "vanilla".to_owned());
     let mut loader_build = loader_build.unwrap_or_else(|| "latest".to_owned());
@@ -335,7 +335,7 @@ async fn launch_minecraft(version: String, loader: Option<String>, loader_build:
     std::fs::create_dir_all(&game_root)
         .map_err(|e| format!("Could not create the Minecraft game folder: {e}"))?;
 
-    let mut options = LaunchOptions::new(game_root, version);
+    let mut options = LaunchOptions::new(game_root, version.clone());
     if let Some(name) = instance_name.as_deref() {
         options.instance = Some(safe_instance_name(name)?);
     }
@@ -357,12 +357,33 @@ async fn launch_minecraft(version: String, loader: Option<String>, loader_build:
 
     let launch = Launch::new(options, account)
         .map_err(|e| format!("Could not prepare Minecraft: {e}"))?;
-    let mut child = launch.run().await
-        .map_err(|e| format!("Minecraft could not be installed or started: {e}"))?;
+    let launch_key = instance_name.as_deref()
+        .map(safe_instance_name).transpose()?
+        .unwrap_or_else(|| format!("default-{version}"));
+    let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    {
+        let mut running = active.lock().map_err(|_| "Could not inspect active Minecraft launches.")?;
+        if !running.insert(launch_key.clone()) {
+            return Err("This Minecraft instance is already running.".into());
+        }
+    }
+    let mut child = match launch.run().await {
+        Ok(child) => child,
+        Err(error) => {
+            if let Ok(mut running) = active.lock() { running.remove(&launch_key); }
+            return Err(format!("Minecraft could not be installed or started: {error}"));
+        }
+    };
 
-    // Keep the child process supervised without blocking the launcher window.
+    // Supervise the child and release the instance lock when the game exits.
     tokio::spawn(async move {
-        let _ = child.wait().await;
+        let exit = child.wait().await;
+        if let Ok(mut running) = active.lock() { running.remove(&launch_key); }
+        let (success, code) = match exit {
+            Ok(status) => (status.success(), status.code()),
+            Err(_) => (false, None),
+        };
+        let _ = app.emit("nova-game-exit", json!({"success":success,"code":code}));
     });
     Ok(())
 }
