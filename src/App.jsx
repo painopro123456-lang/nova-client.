@@ -274,7 +274,7 @@ function LocalInstances({ versions, memoryMb, setPage }) {
     listen("nova-game-exit",event=>{
       if(!alive)return;
       const payload=event.payload||{};
-      setLaunchState(current=>current&&current.instanceName===payload.instanceName&&current.phase==="running"
+      setLaunchState(current=>current&&current.instanceName===payload.instanceName&&(current.phase==="running"||current.phase==="starting")
         ?{...current,phase:payload.success?"closed":"crashed",message:payload.success?"Minecraft closed.":"Minecraft exited unexpectedly. Check the logs for the error."}
         :current);
     }).then(stop=>{if(alive)unlisten=stop;else stop();}).catch(()=>{});
@@ -309,14 +309,14 @@ function LocalInstances({ versions, memoryMb, setPage }) {
     finally{setCreating(false);}
   };
   const combineLogOutput=result=>[
-    result?.launcherLog? "=== NOVA launcher ===\\n"+result.launcherLog:"",
-    result?.minecraftLog? "=== Minecraft game log ===\\n"+result.minecraftLog:""
-  ].filter(Boolean).join("\\n\\n")||"Waiting for Minecraft to create its log file…";
+    result?.launcherLog? "=== NOVA launcher ===\n"+result.launcherLog:"",
+    result?.minecraftLog? "=== Minecraft game log ===\n"+result.minecraftLog:""
+  ].filter(Boolean).join("\n\n")||"Waiting for Minecraft to create its log file…";
   const launchInstance=async instance=>{
     setLaunchState({instanceName:instance.instanceName,phase:"starting",message:"Preparing Minecraft, checking files and starting the game…"});
     try{
       await invoke("launch_minecraft",{version:instance.minecraftVersion||instance.version,loader:instance.loader||"vanilla",loaderBuild:instance.loaderVersion||"latest",instanceName:instance.instanceName,memoryMb});
-      setLaunchState({instanceName:instance.instanceName,phase:"running",message:"Minecraft process started. The game is loading; live output is shown below."});
+      setLaunchState(current=>current?.instanceName===instance.instanceName&&current.phase==="starting"?{...current,phase:"running",message:"Minecraft process started. The game is loading; live output is shown below."}:current);
       setSelectedInstanceTab("logs");
       openInstancePanel(instance,"logs");
     }catch(error){
