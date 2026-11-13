@@ -46,6 +46,23 @@ public final class NovaHud {
             String direction = directionFromYaw(yaw);
             drawPanel(graphics, 8, 144, "Facing  " + direction, MUTED);
         }
+
+        if (NovaModules.enabled("Armor Status")) {
+            int x = 8;
+            int y = 172;
+            String[] slots = {"HELM", "CHEST", "LEGS", "BOOTS"};
+            var armor = client.player.getInventory().armor;
+            for (int i = armor.size() - 1; i >= 0; i--) {
+                var stack = armor.get(i);
+                String value = slots[3 - i] + "  —";
+                if (!stack.isEmpty()) {
+                    int remaining = Math.max(0, stack.getMaxDamage() - stack.getDamageValue());
+                    value = slots[3 - i] + "  " + remaining;
+                }
+                drawPanel(graphics, x, y, value, TEXT);
+                y += 24;
+            }
+        }
     }
 
     private static String directionFromYaw(float yaw) {
