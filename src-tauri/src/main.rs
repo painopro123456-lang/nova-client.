@@ -798,6 +798,14 @@ async fn install_mod_to_instance_inner(
             if !curseforge_loader_matches(mod_loader_type, &loader) {
                 return Err(format!("This CurseForge file does not support the {} loader.", loader));
             }
+            let curseforge_sha1 = file["hashes"].as_array()
+                .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
+                .and_then(|hash| hash["value"].as_str())
+                .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+                .map(str::to_owned)
+                .ok_or("CurseForge did not provide a valid SHA-1 checksum for this mod file; installation was stopped.")?;
+            let expected_file_size = file["fileLength"].as_u64()
+                .ok_or("CurseForge did not provide the expected mod file size; installation was stopped.")?;
             let url = if let Some(url) = file["downloadUrl"].as_str() {
                 url.to_owned()
             } else {
@@ -810,11 +818,8 @@ async fn install_mod_to_instance_inner(
             (
                 url,
                 file["fileName"].as_str().ok_or("CurseForge file name is missing.")?.to_owned(),
-                file["fileLength"].as_u64(),
-                file["hashes"].as_array()
-                    .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
-                    .and_then(|hash| hash["value"].as_str())
-                    .map(str::to_owned),
+                Some(expected_file_size),
+                Some(curseforge_sha1),
                 file["displayName"].as_str().unwrap_or("Mod").to_owned(),
             )
         },
