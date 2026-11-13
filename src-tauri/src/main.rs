@@ -7,10 +7,11 @@ use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
 use std::io::{BufRead, BufReader, Read, Write};
+use std::fs::OpenOptions;
 use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
 use tauri::Emitter;
 
@@ -22,6 +23,34 @@ const MICROSOFT_CLIENT_ID: &str = "09e6a2a2-90ee-47a6-92c4-f8810958de91";
 const NOVA_RELEASES_API: &str = "https://api.github.com/repos/painopro123456-lang/nova-client./releases/latest";
 const NOVA_INSTALLER_ASSET: &str = "NOVA-Client-Setup.exe";
 const MAX_UPDATER_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+
+fn updater_log_path() -> PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    base.join("NOVA Client").join("logs").join("updater.log")
+}
+
+fn updater_log(message: &str) {
+    let path = updater_log_path();
+    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let safe_message = message.replace('\r', " ").replace('\n', " ");
+        let _ = writeln!(file, "[unix:{timestamp}] {safe_message}");
+    }
+}
+
+#[tauri::command]
+fn get_updater_logs() -> Result<String, String> {
+    match std::fs::read_to_string(updater_log_path()) {
+        Ok(contents) => {
+            let lines: Vec<&str> = contents.lines().collect();
+            let start = lines.len().saturating_sub(250);
+            Ok(lines[start..].join("\n"))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("No updater activity has been logged yet.".into()),
+        Err(error) => Err(format!("Could not read updater log: {error}")),
+    }
+}
 
 fn version_is_newer(latest: &str, current: &str) -> bool {
     let parse = |value: &str| -> Option<Vec<u64>> {
@@ -65,6 +94,19 @@ fn release_installer_url(release: &Value) -> Result<String, String> {
 
 #[tauri::command]
 async fn check_for_updates() -> Result<Value, String> {
+    updater_log("Update check started.");
+    let result = check_for_updates_inner().await;
+    match &result {
+        Ok(info) => updater_log(&format!("Update check completed: current={}, latest={}, available={}.",
+            info["currentVersion"].as_str().unwrap_or("unknown"),
+            info["latestVersion"].as_str().unwrap_or("unknown"),
+            info["available"].as_bool().unwrap_or(false))),
+        Err(error) => updater_log(&format!("Update check failed: {error}")),
+    }
+    result
+}
+
+async fn check_for_updates_inner() -> Result<Value, String> {
     let current = env!("CARGO_PKG_VERSION");
     let release = latest_nova_release().await?;
     let latest = release["tag_name"].as_str().ok_or("The latest NOVA release has no version tag.")?
@@ -83,12 +125,20 @@ async fn check_for_updates() -> Result<Value, String> {
 
 #[tauri::command]
 async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    updater_log("Update installation started.");
+    let result = install_update_inner(app).await;
+    if let Err(error) = &result { updater_log(&format!("Update installation failed: {error}")); }
+    result
+}
+
+async fn install_update_inner(app: tauri::AppHandle) -> Result<(), String> {
     let release = latest_nova_release().await?;
     let latest = release["tag_name"].as_str().ok_or("The latest NOVA release has no version tag.")?
         .trim_start_matches('v');
     if !version_is_newer(latest, env!("CARGO_PKG_VERSION")) {
         return Err("NOVA is already up to date.".into());
     }
+    updater_log(&format!("Downloading NOVA version {latest}."));
     let url = release_installer_url(&release)?;
     let client = http_client()?;
     let response = client.get(&url).header("User-Agent", "NOVA-Client-Updater")
@@ -101,10 +151,12 @@ async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
     if bytes.is_empty() || bytes.len() as u64 > MAX_UPDATER_DOWNLOAD_BYTES {
         return Err("The downloaded NOVA installer is empty or exceeds the 200 MiB safety limit.".into());
     }
+    updater_log(&format!("Installer download complete: {} bytes.", bytes.len()));
     let installer = std::env::temp_dir().join(format!("NOVA-Client-Update-{}.exe", std::process::id()));
     std::fs::write(&installer, &bytes).map_err(|e| format!("Could not save the NOVA installer: {e}"))?;
     std::process::Command::new(&installer).spawn()
         .map_err(|e| format!("Could not start the NOVA installer: {e}"))?;
+    updater_log("Installer process launched; closing NOVA for setup.");
     tokio::time::sleep(Duration::from_millis(900)).await;
     app.exit(0);
     Ok(())
@@ -1527,6 +1579,7 @@ fn main() {
             sign_out_minecraft,
             check_for_updates,
             install_update,
+            get_updater_logs,
             minecraft_versions,
             launch_minecraft,
             prepare_modpack_instance,
