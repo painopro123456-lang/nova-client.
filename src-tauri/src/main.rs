@@ -933,18 +933,22 @@ fn list_instances() -> Result<Value,String> {
         let folder=entry.path();
         let marker=folder.join(".nova-installing");
         let path=folder.join("nova-instance.json");
-        if marker.exists()&&!path.exists(){
+        let mut active_marker=false;
+        if marker.exists(){
             let installer_pid=std::fs::read_to_string(&marker).ok().and_then(|value|value.trim().parse::<u32>().ok());
-            let stale=match installer_pid{
-                Some(pid)=>!process_is_running(pid),
-                None=>std::fs::metadata(&marker).and_then(|metadata|metadata.modified()).ok()
+            let active=match installer_pid{
+                Some(pid)=>process_is_running(pid),
+                None=>!std::fs::metadata(&marker).and_then(|metadata|metadata.modified()).ok()
                     .and_then(|modified|modified.elapsed().ok()).is_some_and(|age|age>Duration::from_secs(600))
             };
-            if stale { let _=std::fs::remove_dir_all(&folder); }
-            continue;
+            if active{
+                active_marker=true;
+                if !path.is_file(){continue;}
+            }else if path.is_file(){let _=std::fs::remove_file(&marker);}
+            else{let _=std::fs::remove_dir_all(&folder);continue;}
         }
         if !path.is_file(){continue;}
-        if marker.exists(){let _=std::fs::remove_file(&marker);}
+        if marker.exists()&&!active_marker{let _=std::fs::remove_file(&marker);}
         if let Ok(bytes)=std::fs::read(path){if let Ok(metadata)=serde_json::from_slice::<Value>(&bytes){found.push(metadata);}}
     }
     Ok(Value::Array(found))
