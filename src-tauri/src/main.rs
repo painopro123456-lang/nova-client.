@@ -366,8 +366,9 @@ async fn install_mod_file(app:tauri::AppHandle,provider:String,project_id:String
     let mods_folder=folder.join("mods");
     std::fs::create_dir_all(&mods_folder).map_err(|e|format!("Could not create the instance mods folder: {e}"))?;
     let destination=mods_folder.join(relative);
-    download_pack_file(&app,&name,&url,&destination,size,sha1.as_deref(),&format!("Installing {safe_name}")).await?;
+    let download_result=download_pack_file(&app,&name,&url,&destination,size,sha1.as_deref(),&format!("Installing {safe_name}")).await;
     let _=std::fs::remove_file(folder.join(".nova-installing"));
+    download_result?;
     Ok(json!({"instanceName":name,"projectId":project_id,"provider":provider,"fileName":safe_name}))
 }
 
