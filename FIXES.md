@@ -56,3 +56,10 @@ Only check an item after its code change is committed and the relevant build/tes
 - [ ] 41. Add automated tests for critical installation/authentication flows.
 - [x] 42. Ensure async event listeners clean up correctly under React StrictMode.
 
+
+
+## Remaining architecture and runtime validation
+
+- **31 — CurseForge credential exposure:** This cannot be made secure while the API key is embedded in a distributable desktop executable. The proper fix is a trusted server-side proxy that stores the key outside the client. Obfuscation or encrypting a key with another key shipped in the same app does not solve extraction.
+- **37 — Right Shift:** The screen keyboard event handler and duplicate-toggle protection are implemented and compile. A live Minecraft 26.2 session is still needed to verify the key toggles correctly while other screens are open.
+- **41 — End-to-end coverage:** Automated tests now cover instance-name validation, path traversal, install locking, memory validation, ZIP override extraction and OAuth state parsing. Full browser OAuth and live Modrinth/CurseForge service flows still need runtime integration tests.
