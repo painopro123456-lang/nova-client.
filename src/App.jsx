@@ -115,7 +115,8 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
         const compatible=(Array.isArray(instances)?instances:[]).filter(x=>x.loader&&x.loader!=="vanilla");
         if(!compatible.length)throw new Error("Create a Fabric, Forge, NeoForge, or Quilt instance first. Mods cannot be installed into Vanilla profiles.");
         setTargetInstances(compatible);
-        const preferred=(()=>{try{return localStorage.getItem("nova.modsTargetInstance")||""}catch{return ""}})();\n        setSelectedTargetInstance(compatible.some(x=>x.instanceName===preferred)?preferred:compatible[0].instanceName);
+        const preferred=(()=>{try{return localStorage.getItem("nova.modsTargetInstance")||""}catch{return ""}})();
+        setSelectedTargetInstance(compatible.some(x=>x.instanceName===preferred)?preferred:compatible[0].instanceName);
       }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Could not load your installed instances."));setVersionProject(null);setPackVersionsBusy(false);return;}
     }
     try{
