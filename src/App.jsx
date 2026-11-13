@@ -76,6 +76,7 @@ function Catalog({ packs, memoryMax, onNavigate }) {
   const [targetInstance,setTargetInstance]=useState(()=>{const custom=readStored("nova.instances",[],Array.isArray);const packs=readStored("nova.installedPacks",{},v=>v&&typeof v==="object"&&!Array.isArray(v));return custom[0]?.instanceName||Object.values(packs)[0]?.instanceName||"";});
   const [modInstallBusy,setModInstallBusy]=useState("");
   const [modInstallMessage,setModInstallMessage]=useState("");
+  const [modInstallProgress,setModInstallProgress]=useState(null);
   const [installingId,setInstallingId]=useState("");
   const [packActionMessage,setPackActionMessage]=useState("");
   const [versionProject,setVersionProject]=useState(null);
@@ -119,18 +120,19 @@ function Catalog({ packs, memoryMax, onNavigate }) {
   const availableInstances=[...instances,...Object.values(installed)].filter((item,index,list)=>item?.instanceName&&list.findIndex(other=>other?.instanceName===item.instanceName)===index);
   const installMod=async(project)=>{
     if(!targetInstance){setModInstallMessage("Create an instance first, then select it here.");return;}
-    setModInstallBusy(String(project.id));setModInstallMessage("Installing "+project.title+"…");
+    setModInstallBusy(String(project.id));setModInstallMessage("Installing "+project.title+"…");setModInstallProgress({percent:0,detail:"Connecting to the mod provider…"});
     try{
       const result=await invoke("install_mod_file",{provider,projectId:String(project.id),instanceName:targetInstance});
       setModInstallMessage((result.fileName||project.title)+" installed in "+targetInstance+".");
     }catch(error){setModInstallMessage(typeof error==="string"?error:(error.message||"Could not install this mod."));}
-    finally{setModInstallBusy("");}
+    finally{setModInstallBusy("");setModInstallProgress(null);}
   };
   useEffect(()=>{
     let alive=true;
     let unlisten;
     listen("nova-pack-progress",event=>{
       const progress=event.payload||{};
+      if(modInstallBusy)setModInstallProgress({percent:typeof progress.percent==="number"?progress.percent:null,detail:progress.detail||"Downloading mod file…"});
       setInstallDialog(current=>current?{
         ...current,
         progress:typeof progress.percent==="number"?progress.percent:null,
@@ -139,7 +141,7 @@ function Catalog({ packs, memoryMax, onNavigate }) {
       }:current);
     }).then(stop=>{if(alive)unlisten=stop;else stop();});
     return()=>{alive=false;unlisten?.();};
-  },[]);
+  },[modInstallBusy]);
 
   const choosePackVersion=async(project)=>{
     setVersionProject(project);setPackVersions([]);setSelectedPackVersion("");setPackVersionsBusy(true);setPackActionMessage("");
@@ -230,7 +232,7 @@ function Catalog({ packs, memoryMax, onNavigate }) {
     {busy&&<div className="catalog-state"><div className="loading-orbit"/><b>Finding great projects</b><span>Searching {provider==="modrinth"?"Modrinth":"CurseForge"}…</span></div>}
     {error&&<div className="catalog-note error"><CircleHelp size={16}/><span>{error}</span></div>}
     {packActionMessage&&packs&&<div className="catalog-note"><span>{packActionMessage}</span></div>}
-    {modInstallMessage&&!packs&&<div className="catalog-note"><span>{modInstallMessage}</span>{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
+    {modInstallMessage&&!packs&&<div className="catalog-note"><span>{modInstallMessage}{modInstallProgress?.detail?" · "+modInstallProgress.detail:""}{typeof modInstallProgress?.percent==="number"?" · "+modInstallProgress.percent+"%":""}</span>{!availableInstances.length&&<button className="text-button" onClick={()=>onNavigate("instances")}>Create instance</button>}</div>}
     {!busy&&!error&&hits.length===0&&<div className="catalog-state"><div className="empty-library"><Blocks size={25}/></div><b>No projects found</b><span>Try another search or switch catalog source.</span></div>}
     {!busy&&hits.length>0&&<div className="catalog-results-label"><span>{hits.length} PROJECTS ON THIS PAGE</span><span>PAGE {String(page+1).padStart(2,"0")}</span></div>}
     <div className="catalog-grid">{hits.map((x,i)=><article className="catalog-card" key={x.id}>
