@@ -65,7 +65,7 @@ function Catalog({ packs }) {
   const [busy,setBusy]=useState(false);
   const [error,setError]=useState("");
   const [page,setPage]=useState(0);
-  const [installed,setInstalled]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.installedPacks")||"{}")}catch{return{}}});
+  const [installed,setInstalled]=useState(()=>{try{const value=JSON.parse(localStorage.getItem("nova.installedPacks")||"{}");return value&&typeof value==="object"&&!Array.isArray(value)?value:{}}catch{return{}}});
   const [installingId,setInstallingId]=useState("");
   const [packActionMessage,setPackActionMessage]=useState("");
   const [versionProject,setVersionProject]=useState(null);
@@ -77,7 +77,7 @@ function Catalog({ packs }) {
   useEffect(()=>{
     const ctrl=new AbortController();
     const timer=setTimeout(async()=>{
-      setBusy(true); setError("");
+      setBusy(true); setError(""); setHits([]);
       try {
         let results=[];
         if(provider==="modrinth") {
@@ -97,7 +97,7 @@ function Catalog({ packs }) {
     return ()=>{clearTimeout(timer);ctrl.abort();};
   },[q,packs,provider,page]);
 
-  useEffect(()=>{localStorage.setItem("nova.installedPacks",JSON.stringify(installed));},[installed]);
+  useEffect(()=>{try{localStorage.setItem("nova.installedPacks",JSON.stringify(installed))}catch(e){setPackActionMessage("Could not save installed modpack list: "+(e.message||e))}},[installed]);
   useEffect(()=>{
     let alive=true;
     let unlisten;
@@ -236,14 +236,14 @@ function Catalog({ packs }) {
   </section>;
 }
 function LocalInstances({ versions }) {
-  const [items,setItems]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.instances")||"[]")}catch{return[]}});
-  const [packs,setPacks]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.installedPacks")||"{}")}catch{return{}}});
+  const [items,setItems]=useState(()=>{try{const value=JSON.parse(localStorage.getItem("nova.instances")||"[]");return Array.isArray(value)?value:[]}catch{return[]}});
+  const [packs,setPacks]=useState(()=>{try{const value=JSON.parse(localStorage.getItem("nova.installedPacks")||"{}");return value&&typeof value==="object"&&!Array.isArray(value)?value:{}}catch{return{}}});
   const [name,setName]=useState("");
   const [version,setVersion]=useState("");
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
   useEffect(()=>{if(!version && versions.length) setVersion(versions.find(v=>v.type==="release")?.id || versions[0].id);},[versions,version]);
-  useEffect(()=>{localStorage.setItem("nova.instances",JSON.stringify(items))},[items]);
+  useEffect(()=>{try{localStorage.setItem("nova.instances",JSON.stringify(items))}catch(e){setAction("Could not save instance list in browser storage: "+(e.message||e))}},[items]);
   const add=async()=>{if(!name.trim()||!version)return;const instanceName=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);setAction("Creating instance "+name.trim()+"…");try{const metadata=await invoke("create_instance",{instanceName,displayName:name.trim(),version,loader});setItems(a=>[...a,{id:Date.now(),...metadata}]);setName("");setAction((metadata.name||name.trim())+" created. Press Install & Play to install Minecraft and its loader.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not create this instance."));}};
   const playPack=async pack=>{setAction("Installing Minecraft and loader for "+pack.name+" (if needed), then launching…");try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName});setAction(pack.name+" started.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}};
   const removePack=async(id,pack)=>{setAction("Deleting "+pack.name+"…");try{await invoke("delete_instance",{instanceName:pack.instanceName});setItems(old=>old.filter(x=>x.id!==id));setPacks(old=>{const next={...old};delete next[id];localStorage.setItem("nova.installedPacks",JSON.stringify(next));return next;});setAction(pack.name+" deleted.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not delete this instance."));}};
