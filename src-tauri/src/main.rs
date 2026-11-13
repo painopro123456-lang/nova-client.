@@ -663,8 +663,18 @@ fn copy_atomic<R:Read>(source:&mut R,destination:&Path)->Result<(),String>{
 async fn download_to_file(url:&str,destination:&Path,app:&tauri::AppHandle,instance_name:&str,phase:&str,detail:&str,expected_size:Option<u64>,expected_sha1:Option<&str>)->Result<(),String>{
     if !url.starts_with("https://"){return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());}
     if let Some(parent)=destination.parent(){std::fs::create_dir_all(parent).map_err(|e|format!("Could not create download folder: {e}"))?;}
-    let response=http_client()?.get(url).send().await.map_err(|e|format!("Download failed: {e}"))?
-        .error_for_status().map_err(|e|format!("Download server returned an error: {e}"))?;
+    if is_install_cancelled(instance_name){return Err("Installation cancelled.".into());}
+    let client=http_client()?;
+    let request=client.get(url).send();
+    tokio::pin!(request);
+    let response=loop{
+        tokio::select!{
+            result=&mut request=>break result.map_err(|e|format!("Download failed: {e}"))?,
+            _=tokio::time::sleep(Duration::from_millis(200))=>{
+                if is_install_cancelled(instance_name){return Err("Installation cancelled.".into());}
+            }
+        }
+    }.error_for_status().map_err(|e|format!("Download server returned an error: {e}"))?;
     let total=response.content_length().or(expected_size);
     if total.is_some_and(|size|size>MAX_ARCHIVE_BYTES as u64){return Err("The download is larger than NOVA's 1 GiB safety limit.".into());}
     if is_install_cancelled(instance_name){return Err("Modpack installation cancelled.".into());}
