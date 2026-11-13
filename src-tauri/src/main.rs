@@ -367,6 +367,25 @@ fn credential_entry(user: &str) -> Result<Entry, String> {
         .map_err(|e| format!("Windows Credential Manager is unavailable: {e}"))
 }
 
+fn read_saved_minecraft_account_json(context: &str) -> Result<String, String> {
+    let entry = credential_entry(MINECRAFT_ACCOUNT_USER)?;
+    match entry.get_password() {
+        Ok(value) if !value.trim().is_empty() => Ok(value),
+        Ok(_) => {
+            game_log(&format!("{context}: Windows Credential Manager returned an empty saved account."));
+            Err("NOVA found an empty saved Microsoft account entry. Please sign in again.".into())
+        }
+        Err(keyring::Error::NoEntry) => {
+            game_log(&format!("{context}: no NOVA Minecraft account entry exists in Windows Credential Manager."));
+            Err("NOVA cannot find a saved Microsoft account in Windows Credential Manager. The login may not have been saved on this Windows profile. Sign in again, then retry.".into())
+        }
+        Err(error) => {
+            game_log(&format!("{context}: Windows Credential Manager read failed: {error:?}"));
+            Err(format!("Windows Credential Manager could not read NOVA's saved Microsoft account ({error}). Check the Minecraft launch log for details."))
+        }
+    }
+}
+
 // The approved NOVA key is injected by GitHub Actions at compile time.
 // This embeds it in the private NOVA build; do not distribute that binary publicly.
 fn curseforge_api_key() -> Result<String, String> {
@@ -559,12 +578,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
     emit_pack_progress(&app, "preparing", 0, 0, "Preparing Minecraft, Java and mod loader");
     // Preparing a modpack installs Minecraft, Java, libraries, assets and its loader
     // into the selected instance without starting the game.
-    let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .get_password()
-        .map_err(|error| {
-            game_log(&format!("Modpack preparation could not read the saved Microsoft account: {error}"));
-            "NOVA could not read the saved Microsoft account from Windows Credential Manager. Sign out and sign in again, then retry.".to_string()
-        })?;
+    let account_json = read_saved_minecraft_account_json("Modpack preparation")?;
     let saved_account: Account = serde_json::from_str(&account_json)
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
     let account = refresh_saved_minecraft_account(&saved_account).await?;
@@ -655,12 +669,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         return Err(format!("Minecraft version '{version}' was not found in Mojang's official version list. Refresh the version list and try again."));
     }
 
-    let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .get_password()
-        .map_err(|error| {
-            game_log(&format!("Launch could not read the saved Microsoft account: {error}"));
-            "NOVA could not read the saved Microsoft account from Windows Credential Manager. Sign out and sign in again, then retry.".to_string()
-        })?;
+    let account_json = read_saved_minecraft_account_json("Game launch")?;
     let saved_account: Account = serde_json::from_str(&account_json)
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
     let account = refresh_saved_minecraft_account(&saved_account).await?;
