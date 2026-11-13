@@ -963,10 +963,11 @@ fn create_instance(instance_name: String, display_name: String, version: String,
         return Err(format!("Unsupported mod loader '{loader}'."));
     }
     let folder = instance_folder(&name)?;
-    if folder.exists() {
-        return Err("An instance with that name already exists. Choose a different name so existing game files are not overwritten.".into());
-    }
-    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    if let Some(parent)=folder.parent(){std::fs::create_dir_all(parent).map_err(|e|format!("Could not create instances folder: {e}"))?;}
+    std::fs::create_dir(&folder).map_err(|error|{
+        if error.kind()==std::io::ErrorKind::AlreadyExists{"An instance with that name already exists. Choose a different name so existing game files are not overwritten.".to_string()}
+        else{format!("Could not create instance folder: {error}")}
+    })?;
     let loader_version = if loader == "vanilla" { String::new() } else { "latest".to_owned() };
     let metadata = json!({
         "instanceName": name,
