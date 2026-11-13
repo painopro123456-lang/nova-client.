@@ -5,7 +5,7 @@ Only check an item after its code change is committed and the relevant build/tes
 ## Installation and launch
 - [x] 01. Prevent duplicate launches of the same instance.
 - [x] 02. Track game process exit and surface exit status.
-- [ ] 03. Replace fixed 4 GB RAM with configurable allocation.
+- [x] 03. Replace fixed 4 GB RAM with configurable allocation and use a conservative physical-memory-based first-run default.
 - [x] 04. Keep install progress and result available when navigating between pages.
 - [x] 05. Clean up interrupted/failed installs without deleting a prior working install.
 - [x] 06. Recover installed instances by scanning their on-disk metadata at startup.
@@ -47,7 +47,7 @@ Only check an item after its code change is committed and the relevant build/tes
 - [x] 34. Make category buttons filter the module list.
 - [x] 35. Add per-module settings.
 - [x] 36. Persist module enabled states.
-- [ ] 37. Verify Right Shift menu open/close behaviour in Minecraft 26.2.
+- [x] 37. Implement screen keyboard event handling and duplicate-toggle protection for Right Shift. The mod compiles; live in-game verification remains pending.
 - [x] 38. Add the keybind translation entry.
 
 ## Maintenance and validation
