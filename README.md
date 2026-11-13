@@ -21,7 +21,7 @@ Download progress is byte-based for individual files. Minecraft asset/library pr
 ## Development
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
