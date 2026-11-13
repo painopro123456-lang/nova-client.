@@ -74,6 +74,15 @@ fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Could not initialize secure network client: {e}"))
 }
 
+fn download_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        // Large modpacks can take longer than five minutes on slower connections.
+        .timeout(Duration::from_secs(1800))
+        .build()
+        .map_err(|e| format!("Could not initialize the download client: {e}"))
+}
+
 fn credential_entry(user: &str) -> Result<Entry, String> {
     Entry::new(KEYRING_SERVICE, user)
         .map_err(|e| format!("Windows Credential Manager is unavailable: {e}"))
