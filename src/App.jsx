@@ -164,7 +164,8 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
         if(previous?.instanceName&&previous.instanceName!==metadata.instanceName){
           try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new pack. */}
         }
-        setInstalled(old=>({...old,[storageKey]:metadata}));
+        if(project.image){setPackIcons(old=>{const next={...old,[metadata.instanceName]:project.image};try{localStorage.setItem("nova.packIcons",JSON.stringify(next));}catch{}return next;});}
+      setInstalled(old=>({...old,[storageKey]:metadata,iconUrl:project.image||""}));
         setInstallDialog({name:metadata.name||project.title,step:1,progress:100,status:"Modpack downloaded",detail:"All available modpack files are saved. Sign in with Microsoft only when you're ready to install Minecraft and play.",done:true,error:""});
         setPackActionMessage((metadata.name||project.title)+" downloaded. Microsoft sign-in is only needed to prepare and launch Minecraft.");
         return;
@@ -175,7 +176,8 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
       if(previous?.instanceName&&previous.instanceName!==metadata.instanceName){
         try{await invoke("delete_instance",{instanceName:previous.instanceName});}catch{/* Keep the new working install. */}
       }
-      setInstalled(old=>({...old,[storageKey]:metadata}));
+      if(project.image){setPackIcons(old=>{const next={...old,[metadata.instanceName]:project.image};try{localStorage.setItem("nova.packIcons",JSON.stringify(next));}catch{}return next;});}
+      setInstalled(old=>({...old,[storageKey]:metadata,iconUrl:project.image||""}));
       setInstallDialog({name:metadata.name||project.title,step:2,progress:100,status:"Installation complete",detail:"Minecraft "+metadata.minecraftVersion+" · "+metadata.loader+(metadata.loaderVersion?" "+metadata.loaderVersion:"")+" is ready to play.",done:true,error:""});
       setPackActionMessage((metadata.name||project.title)+" is fully installed and ready to play.");
     }catch(e){
@@ -249,55 +251,91 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
   </section>;
 }
 function LocalInstances({ versions, memoryMb }) {
-  const [items,setItems]=useState(()=>{try{const value=JSON.parse(localStorage.getItem("nova.instances")||"[]");return Array.isArray(value)?value:[]}catch{return[]}});
-  const [packs,setPacks]=useState(()=>{try{const value=JSON.parse(localStorage.getItem("nova.installedPacks")||"{}");return value&&typeof value==="object"&&!Array.isArray(value)?value:{}}catch{return{}}});
+  const [items,setItems]=useState([]);
+  const [packs,setPacks]=useState({});
+  const [packIcons,setPackIcons]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.packIcons")||"{}")}catch{return{}}});
   const [name,setName]=useState("");
   const [version,setVersion]=useState("");
   const [versionSearch,setVersionSearch]=useState("");
   const [versionFilter,setVersionFilter]=useState("release");
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
+  const [showCustom,setShowCustom]=useState(false);
+  const [creating,setCreating]=useState(false);
   useEffect(()=>{
     let alive=true;
     invoke("list_instances").then(found=>{
       if(!alive || !Array.isArray(found)) return;
+      const icons=(()=>{try{return JSON.parse(localStorage.getItem("nova.packIcons")||"{}")}catch{return{}}})();
       const custom=found.filter(x=>x.source==="custom").map(x=>({...x,id:x.instanceName}));
-      const packs=Object.fromEntries(found
-        .filter(x=>(x.source==="modrinth"||x.source==="curseforge")&&x.projectId)
-        .map(x=>[x.source+":"+String(x.projectId),x]));
-      setItems(custom);
-      setPacks(packs);
-    }).catch(error=>{
-      if(alive) setAction(typeof error==="string"?error:(error.message||"Could not recover installed instances from disk."));
-    });
+      const packEntries=found.filter(x=>(x.source==="modrinth"||x.source==="curseforge")&&x.projectId)
+        .map(x=>({...x,iconUrl:x.iconUrl||icons[x.instanceName]||""}));
+      const packMap=Object.fromEntries(packEntries.map(x=>[x.source+":"+String(x.projectId),x]));
+      setItems(custom);setPacks(packMap);setPackIcons(icons);
+    }).catch(error=>{if(alive)setAction(typeof error==="string"?error:(error.message||"Could not recover installed instances from disk."));});
     return()=>{alive=false;};
   },[]);
-  useEffect(()=>{if(!version && versions.length) setVersion(versions.find(v=>v.type==="release")?.id || versions[0].id);},[versions,version]);
+  useEffect(()=>{if(!version&&versions.length)setVersion(versions.find(v=>v.type==="release")?.id||versions[0].id);},[versions,version]);
   const visibleVersions=versions.filter(v=>(versionFilter==="all"||v.type===versionFilter)&&v.id.toLowerCase().includes(versionSearch.trim().toLowerCase())).slice(0,300);
   const selectedVersionVisible=visibleVersions.some(v=>v.id===version);
-  useEffect(()=>{try{localStorage.setItem("nova.instances",JSON.stringify(items))}catch(e){setAction("Could not save instance list in browser storage: "+(e.message||e))}},[items]);
-  const add=async()=>{if(!name.trim()||!version)return;const instanceName=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);setAction("Creating instance "+name.trim()+"…");try{const metadata=await invoke("create_instance",{instanceName,displayName:name.trim(),version,loader});setItems(a=>[...a,{id:Date.now(),...metadata}]);setName("");setAction((metadata.name||name.trim())+" created. Press Install & Play to install Minecraft and its loader.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not create this instance."));}};
-  const playPack=async pack=>{setAction("Installing Minecraft and loader for "+pack.name+" (if needed), then launching…");try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName,memoryMb});setAction(pack.name+" started.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}};
-  const removePack=async(id,pack)=>{setAction("Deleting "+pack.name+"…");try{await invoke("delete_instance",{instanceName:pack.instanceName});setItems(old=>old.filter(x=>x.id!==id));setPacks(old=>{const next={...old};delete next[id];localStorage.setItem("nova.installedPacks",JSON.stringify(next));return next;});setAction(pack.name+" deleted.");}catch(e){setAction(typeof e==="string"?e:(e.message||"Could not delete this instance."));}};
+  useEffect(()=>{try{localStorage.setItem("nova.instances",JSON.stringify(items))}catch(e){setAction("Could not save instance list: "+(e.message||e))}},[items]);
+  const add=async()=>{
+    if(!name.trim()||!version||!selectedVersionVisible)return;
+    const instanceName=name.trim().toLowerCase().replace(/[^a-z0-9]+/g,"-").replace(/^-|-$/g,"").slice(0,48);
+    setCreating(true);setAction("Creating "+name.trim()+"…");
+    try{
+      const metadata=await invoke("create_instance",{instanceName,displayName:name.trim(),version,loader});
+      setItems(a=>[...a,{id:metadata.instanceName,...metadata}]);setName("");setShowCustom(false);
+      setAction((metadata.name||"Custom instance")+" created. Install & Play when you're ready.");
+    }catch(e){setAction(typeof e==="string"?e:(e.message||"Could not create this instance."));}
+    finally{setCreating(false);}
+  };
+  const playPack=async pack=>{
+    setAction("Preparing "+pack.name+"…");
+    try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName,memoryMb});setAction(pack.name+" started.");}
+    catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}
+  };
+  const playCustom=async item=>{
+    setAction("Preparing "+item.name+"…");
+    try{await invoke("launch_minecraft",{version:item.minecraftVersion||item.version,loader:item.loader||"vanilla",loaderBuild:item.loaderVersion||"latest",instanceName:item.instanceName,memoryMb});setAction(item.name+" started.");}
+    catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}
+  };
+  const removePack=async(id,pack)=>{
+    setAction("Deleting "+pack.name+"…");
+    try{
+      await invoke("delete_instance",{instanceName:pack.instanceName});
+      setPacks(old=>{const next={...old};delete next[id];return next;});
+      setPackIcons(old=>{const next={...old};delete next[pack.instanceName];try{localStorage.setItem("nova.packIcons",JSON.stringify(next));}catch{}return next;});
+      setAction(pack.name+" deleted.");
+    }catch(e){setAction(typeof e==="string"?e:(e.message||"Could not delete this instance."));}
+  };
+  const removeCustom=async item=>{
+    setAction("Deleting "+item.name+"…");
+    try{await invoke("delete_instance",{instanceName:item.instanceName});setItems(old=>old.filter(x=>x.instanceName!==item.instanceName));setAction(item.name+" deleted.");}
+    catch(e){setAction(typeof e==="string"?e:(e.message||"Could not delete this instance."));}
+  };
   const installedPacks=Object.entries(packs);
-  return <section className="local-instances"><div className="eyebrow">LOCAL PROFILES</div><h2>Your instances</h2><p>Each modpack gets its own isolated folder. NOVA installs the pack files, Minecraft, Java and the matching loader before marking the instance ready.</p>
-    {installedPacks.length>0&&<><div className="section-heading"><div><div className="eyebrow">INSTALLED MODPACKS</div><h2>Your library</h2></div></div>{installedPacks.map(([id,pack])=><div className="instance-entry" key={id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{pack.name}</b><span>Minecraft {pack.minecraftVersion} · {pack.loader}{pack.loaderVersion?" "+pack.loaderVersion:""} · {pack.source}</span></div><button className="primary-btn" onClick={()=>playPack(pack)}><Play size={13} fill="currentColor"/> Play</button><button className="delete-entry" onClick={()=>removePack(id,pack)}>Delete</button></div>)}</>}
-    <div className="section-heading"><div><div className="eyebrow">CUSTOM PROFILES</div><h2>Minecraft version manager</h2><p>Search releases and snapshots, then create an isolated profile with the loader you want.</p></div></div>
-    <div className="instance-create">
-      <input value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="Instance name"/>
-      <input value={versionSearch} onChange={e=>setVersionSearch(e.target.value)} placeholder="Search versions (e.g. 1.21.4)"/>
-      <select value={versionFilter} onChange={e=>{const nextFilter=e.target.value;setVersionFilter(nextFilter);const next=versions.find(v=>(nextFilter==="all"||v.type===nextFilter)&&v.id.toLowerCase().includes(versionSearch.trim().toLowerCase()));if(next)setVersion(next.id);}}>
-        <option value="release">Releases</option><option value="snapshot">Snapshots</option><option value="all">All versions</option>
-      </select>
-      <select value={selectedVersionVisible?version:""} onChange={e=>setVersion(e.target.value)} disabled={versions.length===0||visibleVersions.length===0}>
-        <option value="" disabled>{versions.length===0?"Loading versions…":visibleVersions.length===0?"No matching versions":"Choose a Minecraft version"}</option>
-        {visibleVersions.map(v=><option key={v.id} value={v.id}>{v.id}{v.type==="snapshot"?" · Snapshot":""}</option>)}
-      </select>
-      <select value={loader} onChange={e=>setLoader(e.target.value)}><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="quilt">Quilt</option><option value="vanilla">Vanilla</option></select>
-      <button className="primary-btn" onClick={add} disabled={!name.trim()||!selectedVersionVisible}><Plus size={14}/> Create instance</button>
-    </div>
-    <div className="catalog-note">Showing {visibleVersions.length} of {versions.length} Minecraft versions. Selected: {selectedVersionVisible?version:"none"}.</div>{items.length===0?<div className="catalog-note">No custom profiles yet.</div>:items.map(x=><div className="instance-entry" key={x.id}><div className="minecraft-icon"><Box size={20}/></div><div className="quick-info"><b>{x.name}</b><span>Minecraft {x.minecraftVersion||x.version} · {x.loader||"vanilla"} · isolated instance</span></div><button className="primary-btn" onClick={()=>playPack(x)}>Install & Play</button><button className="delete-entry" onClick={()=>removePack(x.id,x)}>Delete</button></div>)}
+  return <section className="local-instances">
+    <div className="instances-topline"><div><div className="eyebrow">YOUR GAME LIBRARY</div><h2>Your instances</h2><p>Modpacks and custom setups, each kept in its own isolated folder.</p></div><button className="primary-btn custom-instance-trigger" onClick={()=>setShowCustom(true)}><Plus size={15}/> Custom instance</button></div>
+    {installedPacks.length>0&&<><div className="section-heading"><div><div className="eyebrow">MODPACK LIBRARY</div><h2>Installed modpacks</h2></div><span className="instance-count">{installedPacks.length} PACK{installedPacks.length===1?"":"S"}</span></div><div className="instance-grid">{installedPacks.map(([id,pack])=><article className="instance-card" key={id}>
+      <div className="instance-card-art">{pack.iconUrl?<img src={pack.iconUrl} alt="" loading="lazy" onError={e=>{e.currentTarget.style.display="none";}}/>:<Box size={30}/>}</div>
+      <div className="instance-card-copy"><div className="instance-card-kicker">MODPACK · {pack.source}</div><b>{pack.name}</b><span>Minecraft {pack.minecraftVersion} · {pack.loader}{pack.loaderVersion?" "+pack.loaderVersion:""}</span></div>
+      <div className="instance-card-actions"><button className="primary-btn" onClick={()=>playPack(pack)}><Play size={13} fill="currentColor"/> Play</button><button className="delete-entry" onClick={()=>removePack(id,pack)}>Delete</button></div>
+    </article>)}</div></>}
+    <div className="section-heading instance-subheading"><div><div className="eyebrow">YOUR SETUPS</div><h2>Custom instances</h2></div><span className="instance-count">{items.length} INSTANCE{items.length===1?"":"S"}</span></div>
+    {items.length===0?<div className="instances-empty"><div className="empty-orbit"><Layers3 size={24}/></div><b>No custom instances yet</b><span>Create a clean Minecraft profile with the version and loader you want.</span><button className="secondary-btn" onClick={()=>setShowCustom(true)}><Plus size={14}/> Create your first instance</button></div>:<div className="instance-grid">{items.map(x=><article className="instance-card custom-card" key={x.instanceName||x.id}><div className="instance-card-art custom-art"><Box size={28}/></div><div className="instance-card-copy"><div className="instance-card-kicker">CUSTOM PROFILE</div><b>{x.name}</b><span>Minecraft {x.minecraftVersion||x.version} · {x.loader||"vanilla"}</span></div><div className="instance-card-actions"><button className="primary-btn" onClick={()=>playCustom(x)}><Play size={13} fill="currentColor"/> Install & Play</button><button className="delete-entry" onClick={()=>removeCustom(x)}>Delete</button></div></article>)}</div>}
     {action&&<div className="catalog-note">{action}</div>}
+    {showCustom&&<div className="custom-instance-backdrop" role="presentation" onClick={()=>setShowCustom(false)}><section className="custom-instance-dialog" role="dialog" aria-modal="true" aria-labelledby="custom-instance-title" onClick={e=>e.stopPropagation()}>
+      <div className="custom-dialog-top"><div><div className="eyebrow">NOVA INSTANCE BUILDER</div><h2 id="custom-instance-title">Create custom instance</h2><p>Choose a Minecraft version, pick a loader, and give this profile a name.</p></div><button className="icon-btn" onClick={()=>setShowCustom(false)} aria-label="Close"><X size={17}/></button></div>
+      <div className="custom-form-grid"><label className="custom-field custom-name-field"><span>INSTANCE NAME</span><input autoFocus value={name} onChange={e=>setName(e.target.value)} onKeyDown={e=>e.key==="Enter"&&add()} placeholder="e.g. Survival, PvP, Modded"/></label>
+      <label className="custom-field"><span>MOD LOADER</span><select value={loader} onChange={e=>setLoader(e.target.value)}><option value="fabric">Fabric</option><option value="forge">Forge</option><option value="neoforge">NeoForge</option><option value="quilt">Quilt</option><option value="vanilla">Vanilla</option></select></label></div>
+      <div className="custom-version-head"><div><div className="eyebrow">GAME VERSION</div><b>Choose your Minecraft version</b></div><span>{visibleVersions.length} available</span></div>
+      <div className="custom-version-tools"><div className="custom-version-search"><Search size={15}/><input value={versionSearch} onChange={e=>setVersionSearch(e.target.value)} placeholder="Search versions…"/></div><div className="custom-version-filters"><button className={versionFilter==="release"?"selected":""} onClick={()=>setVersionFilter("release")}>Releases</button><button className={versionFilter==="snapshot"?"selected":""} onClick={()=>setVersionFilter("snapshot")}>Snapshots</button><button className={versionFilter==="all"?"selected":""} onClick={()=>setVersionFilter("all")}>All</button></div></div>
+      <div className="custom-version-list">{visibleVersions.map(v=><button key={v.id} className={"custom-version-option"+(version===v.id?" selected":"")} onClick={()=>setVersion(v.id)}><span className="version-option-icon"><Box size={15}/></span><span className="version-option-copy"><b>{v.id}</b><small>{v.type==="snapshot"?"Snapshot":"Stable release"}</small></span>{version===v.id?<CheckCircle2 size={17}/>:<span className="version-option-radio"/>}</button>)}
+        {visibleVersions.length===0&&<div className="custom-no-versions">No versions match that search.</div>}
+      </div>
+      <div className="custom-dialog-footer"><div><span>SELECTED VERSION</span><b>{selectedVersionVisible?version:"Choose a version"}</b></div><button className="primary-btn" onClick={add} disabled={!name.trim()||!selectedVersionVisible||creating}>{creating?"Creating…":<><Plus size={14}/> Create instance</>}</button></div>
+    </section></div>}
   </section>;
 }
 
