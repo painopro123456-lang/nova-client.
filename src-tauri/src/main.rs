@@ -1543,6 +1543,36 @@ async fn resolve_verified_modrinth_fallback(
     Ok(None)
 }
 
+
+async fn download_one_curseforge_mod(
+    app: tauri::AppHandle,
+    folder: PathBuf,
+    entry: (usize, u64, u64, String, u64, String, String, Option<String>),
+) -> Result<String, String> {
+    let (number, project, file, filename, expected_size, expected_sha1, url, download_key) = entry;
+    let mods_folder = folder.join("mods");
+    let destination = mods_folder.join(&filename);
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let staging = mods_folder.join(format!(".{filename}.{}.{sequence}.partial", std::process::id()));
+    // A Modrinth CDN URL must use the unauthenticated public-download client;
+    // only approved CurseForge CDN hosts receive the CurseForge API key.
+    download_pack_file_with_curseforge_key(
+        &app, &url, &staging, Some(expected_size), Some(&expected_sha1), download_key.as_deref()
+    ).await.map_err(|e| format!("Could not save verified mod {number} ({project}/{file}): {e}"))?;
+    let jar_check = std::fs::File::open(&staging)
+        .map_err(|e| format!("Could not verify CurseForge mod {number}: {e}"))
+        .and_then(|file| ZipArchive::new(file).map(|_| ()).map_err(|e| format!("CurseForge mod {number} is not a valid JAR archive: {e}")));
+    if let Err(error) = jar_check {
+        let _ = std::fs::remove_file(&staging);
+        return Err(error);
+    }
+    replace_file(&staging, &destination).map_err(|e| {
+        let _ = std::fs::remove_file(&staging);
+        format!("Could not finalize CurseForge mod {number}: {e}")
+    })?;
+    Ok(filename)
+}
+
 #[tauri::command]
 async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
@@ -1623,94 +1653,126 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
     if pack_files.len() > MAX_ARCHIVE_ENTRIES {
         return Err("The CurseForge manifest contains too many files and was blocked for safety.".into());
     }
-    let total_files = pack_files.iter().filter(|item| item["required"].as_bool() != Some(false)).count() as u64;
+    // Resolve metadata in parallel, then download verified files with a small
+    // bounded worker pool. This avoids hundreds of serial API round-trips while
+    // keeping pressure on CurseForge/CDNs controlled.
+    let required_files: Vec<(usize, u64, u64)> = pack_files.iter().enumerate()
+        .filter(|(_, item)| item["required"].as_bool() != Some(false))
+        .map(|(index, item)| {
+            let project = item["projectID"].as_u64().ok_or("CurseForge project ID is missing.")?;
+            let file = item["fileID"].as_u64().ok_or("CurseForge file ID is missing.")?;
+            Ok((index + 1, project, file))
+        })
+        .collect::<Result<_, String>>()?;
+    let total_files = required_files.len() as u64;
     let mut total_download_bytes = 0u64;
-    let mut completed_files = 0u64;
-    emit_pack_progress(&app, "files", 0, total_files, "Downloading CurseForge files");
-    for (i, item) in pack_files.iter().enumerate() {
-        if item["required"].as_bool() == Some(false) { continue; }
-        let project = item["projectID"].as_u64().ok_or("CurseForge project ID is missing.")?;
-        let file = item["fileID"].as_u64().ok_or("CurseForge file ID is missing.")?;
-        // Read file metadata first: CurseForge may include a direct downloadUrl.
-        // Prefer it, and only call the download-url endpoint when it is absent.
-        let mod_details: Value = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}"))
-            .headers(headers.clone()).send().await
-            .map_err(|e| format!("Could not verify CurseForge mod {}: {e}", i+1))?
-            .error_for_status().map_err(|e| format!("CurseForge could not verify mod {}: {e}", i+1))?
-            .json().await.map_err(|e| format!("CurseForge mod {} metadata was unreadable: {e}", i+1))?;
-        let details = &mod_details["data"];
-        if details["modId"].as_u64() != Some(project) || details["id"].as_u64() != Some(file) {
-            return Err(format!("CurseForge returned mismatched metadata for mod {project}/{file}."));
-        }
-        let filename = details["fileName"].as_str()
-            .filter(|name| !name.trim().is_empty())
-            .ok_or_else(|| format!("CurseForge did not provide a filename for mod {project}/{file}."))?
-            .to_owned();
-        let expected_size = details["fileLength"].as_u64()
-            .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
-            .ok_or_else(|| format!("CurseForge did not provide a valid size for mod {project}/{file}."))?;
-        let expected_sha1 = details["hashes"].as_array()
-            .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
-            .and_then(|hash| hash["value"].as_str())
-            .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
-            .ok_or_else(|| format!("CurseForge did not provide a valid SHA-1 checksum for mod {project}/{file}."))?;
-        total_download_bytes = total_download_bytes.checked_add(expected_size)
-            .ok_or("CurseForge pack download size overflowed.")?;
-        if total_download_bytes > MAX_ARCHIVE_TOTAL_BYTES {
-            return Err("The CurseForge pack's required downloads exceed NOVA's 2 GiB safety limit.".into());
-        }
-        let url: String = if let Some(direct_url) = details["downloadUrl"].as_str().filter(|url| url.starts_with("https://")) {
-            direct_url.to_owned()
-        } else {
-            let response = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}/download-url"))
+    emit_pack_progress(&app, "files", 0, total_files, "Checking mod files");
+
+    let mut metadata_jobs = tokio::task::JoinSet::new();
+    for (number, project, file) in required_files {
+        let client = client.clone();
+        let headers = headers.clone();
+        let app = app.clone();
+        let mc_version = mc_version.clone();
+        let loader = loader.clone();
+        let api_key = api_key.clone();
+        metadata_jobs.spawn(async move {
+            let metadata: Value = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}"))
                 .headers(headers.clone()).send().await
-                .map_err(|e| format!("Could not resolve CurseForge mod {}: {e}", i+1))?;
-            let status = response.status();
-            if status == reqwest::StatusCode::FORBIDDEN {
-                if let Some(alternate) = resolve_verified_modrinth_fallback(
-                    &client, project, &filename, &mc_version, &loader, expected_sha1
-                ).await? {
-                    updater_log(&format!("CurseForge returned HTTP 403 for {filename}; using an exact Modrinth mirror verified by SHA-1."));
-                    alternate
-                } else {
-                    return Err(format!("CurseForge refused the download URL for required mod {} ({filename}, {project}/{file}) with HTTP 403. NOVA also checked its verified Modrinth mirror and found no exact Minecraft/loader/file/checksum match. Try another modpack version or install this file through CurseForge.", i+1));
-                }
-            } else {
-                let payload = response.error_for_status()
-                    .map_err(|e| format!("CurseForge could not provide mod {}: {e}", i+1))?
-                    .json::<Value>().await
-                    .map_err(|e| format!("CurseForge mod {} download response was unreadable: {e}", i+1))?;
-                payload["data"].as_str()
-                    .ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}."))?
-                    .to_owned()
+                .map_err(|e| format!("Could not verify CurseForge mod {number}: {e}"))?
+                .error_for_status().map_err(|e| format!("CurseForge could not verify mod {number}: {e}"))?
+                .json().await.map_err(|e| format!("CurseForge mod {number} metadata was unreadable: {e}"))?;
+            let details = &metadata["data"];
+            if details["modId"].as_u64() != Some(project) || details["id"].as_u64() != Some(file) {
+                return Err(format!("CurseForge returned mismatched metadata for mod {project}/{file}."));
             }
-        };
-        let mods_folder = folder.join("mods");
-        std::fs::create_dir_all(&mods_folder).map_err(|e| format!("Could not create mods folder: {e}"))?;
-        let destination = mods_folder.join(&filename);
-        let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
-        let staging = mods_folder.join(format!(".{filename}.{}.{sequence}.partial", std::process::id()));
-        // A Modrinth CDN URL must use the unauthenticated public-download client;
-        // the authenticated CurseForge client intentionally rejects non-CurseForge redirects.
-        let download_key = reqwest::Url::parse(&url).ok()
-            .and_then(|parsed| parsed.host_str().map(str::to_owned))
-            .filter(|host| host == "edge.forgecdn.net" || host == "mediafilez.forgecdn.net")
-            .map(|_| api_key.as_str());
-        download_pack_file_with_curseforge_key(&app, &url, &staging, Some(expected_size), Some(expected_sha1), download_key).await
-            .map_err(|e| format!("Could not save verified mod {}: {e}", i+1))?;
-        let jar_check = std::fs::File::open(&staging)
-            .map_err(|e| format!("Could not verify CurseForge mod {}: {e}", i+1))
-            .and_then(|file| ZipArchive::new(file).map(|_| ()).map_err(|e| format!("CurseForge mod {} is not a valid JAR archive: {e}", i+1)));
-        if let Err(error) = jar_check {
-            let _ = std::fs::remove_file(&staging);
-            return Err(error);
+            let filename = details["fileName"].as_str()
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| format!("CurseForge did not provide a filename for mod {project}/{file}."))?
+                .to_owned();
+            let expected_size = details["fileLength"].as_u64()
+                .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+                .ok_or_else(|| format!("CurseForge did not provide a valid size for mod {project}/{file}."))?;
+            let expected_sha1 = details["hashes"].as_array()
+                .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
+                .and_then(|hash| hash["value"].as_str())
+                .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+                .ok_or_else(|| format!("CurseForge did not provide a valid SHA-1 checksum for mod {project}/{file}."))?
+                .to_owned();
+
+            let url: String = if let Some(direct_url) = details["downloadUrl"].as_str().filter(|url| url.starts_with("https://")) {
+                direct_url.to_owned()
+            } else {
+                let response = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}/download-url"))
+                    .headers(headers).send().await
+                    .map_err(|e| format!("Could not resolve CurseForge mod {number}: {e}"))?;
+                if response.status() == reqwest::StatusCode::FORBIDDEN {
+                    if let Some(alternate) = resolve_verified_modrinth_fallback(
+                        &client, project, &filename, &mc_version, &loader, &expected_sha1
+                    ).await? {
+                        updater_log(&format!("CurseForge returned HTTP 403 for {filename}; using an exact Modrinth mirror verified by SHA-1."));
+                        alternate
+                    } else {
+                        return Err(format!("CurseForge refused the download URL for required mod {number} ({filename}, {project}/{file}) with HTTP 403. NOVA also checked its verified Modrinth mirror and found no exact Minecraft/loader/file/checksum match. Try another modpack version or install this file through CurseForge."));
+                    }
+                } else {
+                    let payload = response.error_for_status()
+                        .map_err(|e| format!("CurseForge could not provide mod {number}: {e}"))?
+                        .json::<Value>().await
+                        .map_err(|e| format!("CurseForge mod {number} download response was unreadable: {e}"))?;
+                    payload["data"].as_str()
+                        .ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}."))?
+                        .to_owned()
+                }
+            };
+            let download_key = reqwest::Url::parse(&url).ok()
+                .and_then(|parsed| parsed.host_str().map(str::to_owned))
+                .filter(|host| host == "edge.forgecdn.net" || host == "mediafilez.forgecdn.net")
+                .map(|_| api_key);
+            let _ = app; // Keep task inputs independent of the UI thread.
+            Ok::<_, String>((number, project, file, filename, expected_size, expected_sha1, url, download_key))
+        });
+    }
+
+    let mut resolved = Vec::with_capacity(total_files as usize);
+    while let Some(result) = metadata_jobs.join_next().await {
+        let entry = result.map_err(|e| format!("CurseForge metadata worker failed: {e}"))??;
+        resolved.push(entry);
+    }
+    for entry in &resolved {
+        total_download_bytes = total_download_bytes.checked_add(entry.4)
+            .ok_or("CurseForge pack download size overflowed.")?;
+    }
+    if total_download_bytes > MAX_ARCHIVE_TOTAL_BYTES {
+        return Err("The CurseForge pack's required downloads exceed NOVA's 2 GiB safety limit.".into());
+    }
+
+    std::fs::create_dir_all(folder.join("mods"))
+        .map_err(|e| format!("Could not create mods folder: {e}"))?;
+    let mut download_jobs = tokio::task::JoinSet::new();
+    let mut next = resolved.into_iter();
+    let mut completed_files = 0u64;
+    const MAX_PARALLEL_MOD_DOWNLOADS: usize = 4;
+    for _ in 0..MAX_PARALLEL_MOD_DOWNLOADS {
+        if let Some(entry) = next.next() {
+            let app = app.clone();
+            let folder = folder.clone();
+            download_jobs.spawn(async move {
+                download_one_curseforge_mod(app, folder, entry).await
+            });
         }
-        replace_file(&staging, &destination).map_err(|e| {
-            let _ = std::fs::remove_file(&staging);
-            format!("Could not finalize CurseForge mod {}: {e}", i+1)
-        })?;
+    }
+    while let Some(result) = download_jobs.join_next().await {
+        let downloaded = result.map_err(|e| format!("CurseForge download worker failed: {e}"))??;
         completed_files += 1;
-        emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
+        emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}: {downloaded}"));
+        if let Some(entry) = next.next() {
+            let app = app.clone();
+            let folder = folder.clone();
+            download_jobs.spawn(async move {
+                download_one_curseforge_mod(app, folder, entry).await
+            });
+        }
     }
     extract_pack_overrides(&archive_path, "overrides/", &folder)?;
     let _ = std::fs::remove_file(&archive_path);
