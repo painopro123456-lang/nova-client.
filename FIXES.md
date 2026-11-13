@@ -31,7 +31,7 @@ Only check an item after its code change is committed and the relevant build/tes
 - [x] 22. Validate localStorage data shapes before rendering.
 - [x] 23. Show the signed-in account in the profile UI.
 - [x] 24. Provide a working sign-out control.
-- [ ] 25. Replace the settings placeholder with functional settings.
+- [x] 25. Replace the settings placeholder with functional settings.
 - [ ] 26. Replace or clearly label the PvP placeholder.
 - [x] 27. Keep progress event handling alive while the catalog screen is unmounted.
 
@@ -51,8 +51,8 @@ Only check an item after its code change is committed and the relevant build/tes
 - [ ] 38. Add the keybind translation entry.
 
 ## Maintenance and validation
-- [ ] 39. Update README to match the implemented product.
+- [x] 39. Update README to match the implemented product.
 - [ ] 40. Commit dependency lockfiles and use deterministic installs.
 - [ ] 41. Add automated tests for critical installation/authentication flows.
-- [ ] 42. Ensure async event listeners clean up correctly under React StrictMode.
+- [x] 42. Ensure async event listeners clean up correctly under React StrictMode.
 
