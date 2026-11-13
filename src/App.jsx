@@ -74,6 +74,8 @@ function Catalog({ packs, active, memoryMb }) {
   const [packVersionsBusy,setPackVersionsBusy]=useState(false);
   const [selectedPackVersion,setSelectedPackVersion]=useState("");
   const [installDialog,setInstallDialog]=useState(null);
+  const [targetInstances,setTargetInstances]=useState([]);
+  const [selectedTargetInstance,setSelectedTargetInstance]=useState("");
 
   useEffect(()=>{
     if(!active) return;
@@ -120,6 +122,15 @@ function Catalog({ packs, active, memoryMb }) {
 
   const choosePackVersion=async(project)=>{
     setVersionProject(project);setPackVersions([]);setSelectedPackVersion("");setPackVersionsBusy(true);setPackActionMessage("");
+    if(!packs){
+      try{
+        const instances=await invoke("list_instances");
+        const compatible=(Array.isArray(instances)?instances:[]).filter(x=>x.loader&&x.loader!=="vanilla");
+        if(!compatible.length)throw new Error("Create a Fabric, Forge, NeoForge, or Quilt instance first. Mods cannot be installed into Vanilla profiles.");
+        setTargetInstances(compatible);
+        setSelectedTargetInstance(compatible[0].instanceName);
+      }catch(e){setPackActionMessage(typeof e==="string"?e:(e.message||"Could not load your installed instances."));setVersionProject(null);setPackVersionsBusy(false);return;}
+    }
     try{
       let versions=[];
       if(provider==="modrinth"){
