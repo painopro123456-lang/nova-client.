@@ -158,6 +158,15 @@ function Catalog({ packs, active, memoryMb }) {
     setVersionProject(null);
     setInstallDialog({name:project.title,step:0,progress:null,status:"Starting installation",detail:"Preparing your isolated modpack instance…",done:false,error:""});
     try{
+      if(!packs){
+        const target=targetInstances.find(x=>x.instanceName===selectedTargetInstance);
+        if(!target)throw new Error("Choose an existing modded instance.");
+        setInstallDialog({name:project.title,step:0,progress:null,status:"Installing mod",detail:"Checking compatibility and downloading the selected JAR…",done:false,error:""});
+        const result=await invoke("install_mod_to_instance",{provider,projectId,versionId:selectedPackVersion,instanceName:selectedTargetInstance});
+        setInstallDialog({name:project.title,step:2,progress:100,status:"Mod installed",detail:result.fileName+" was added to "+(target.name||target.instanceName)+". It will load the next time Minecraft starts.",done:true,error:""});
+        setPackActionMessage(project.title+" installed into "+(target.name||target.instanceName)+".");
+        return;
+      }
       setInstallDialog({name:project.title,step:0,progress:null,status:"Downloading modpack",detail:"Getting the selected release and its manifest…",done:false,error:""});
       const metadata=provider==="modrinth"
         ? await invoke("install_modrinth_modpack",{projectId,instanceName,versionId:selectedPackVersion})
@@ -212,16 +221,16 @@ function Catalog({ packs, active, memoryMb }) {
     </div>
     {busy&&<div className="catalog-state"><div className="loading-orbit"/><b>Finding great projects</b><span>Searching {provider==="modrinth"?"Modrinth":"CurseForge"}…</span></div>}
     {error&&<div className="catalog-note error"><CircleHelp size={16}/><span>{error}</span></div>}
-    {packActionMessage&&packs&&<div className="catalog-note"><span>{packActionMessage}</span></div>}
+    {packActionMessage&&<div className="catalog-note"><span>{packActionMessage}</span></div>}
     {!busy&&!error&&hits.length===0&&<div className="catalog-state"><div className="empty-library"><Blocks size={25}/></div><b>No projects found</b><span>Try another search or switch catalog source.</span></div>}
     {!busy&&hits.length>0&&<div className="catalog-results-label"><span>{hits.length} PROJECTS ON THIS PAGE</span><span>PAGE {String(page+1).padStart(2,"0")}</span></div>}
     <div className="catalog-grid">{hits.map((x,i)=><article className="catalog-card" key={x.id}>
       <div className="project-card-top">{x.image?<img src={x.image} alt="" loading="lazy"/>:<div className="catalog-placeholder"><Blocks size={20}/></div>}<span className="project-source">{provider==="modrinth"?"MODRINTH":"CURSEFORGE"}</span><span className="project-rank">{String(page*24+i+1).padStart(2,"0")}</span></div>
       <h3>{x.title}</h3><p>{x.description}</p>
       <div className="catalog-meta"><span><ArrowDownToLine size={12}/>{Number(x.downloads||0).toLocaleString()}</span><a href={x.url} target="_blank" rel="noreferrer">View project <ArrowUpRight size={12}/></a></div>
-      {packs&&<div className="pack-install-row">{installed[provider+":"+String(x.id)]
+      <div className="pack-install-row">{packs&&installed[provider+":"+String(x.id)]
         ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Install & Play"}</button>
-        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
+        : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :packs?"Choose version":"Install to instance"}</button>}</div>
     </article>)}</div>}
     {installDialog&&<div className="pack-version-backdrop install-progress-backdrop" role="presentation">
       <section className="pack-version-dialog install-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="install-progress-title">
