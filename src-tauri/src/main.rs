@@ -780,11 +780,26 @@ fn list_instances() -> Result<Vec<Value>, String> {
         }
         let metadata_path = entry.path().join("nova-instance.json");
         if !metadata_path.is_file() { continue; }
-        let bytes = std::fs::read(&metadata_path)
-            .map_err(|e| format!("Could not recover instance metadata: {e}"))?;
-        let metadata: Value = serde_json::from_slice(&bytes)
-            .map_err(|e| format!("Instance metadata in '{}' is invalid: {e}", entry.file_name().to_string_lossy()))?;
-        if metadata["instanceName"].as_str().is_some() && metadata["minecraftVersion"].as_str().is_some() {
+        let bytes = match std::fs::read(&metadata_path) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                eprintln!("Skipping unreadable NOVA instance metadata: {error}");
+                continue;
+            }
+        };
+        let metadata: Value = match serde_json::from_slice(&bytes) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                eprintln!("Skipping invalid NOVA instance metadata in '{}': {error}", entry.file_name().to_string_lossy());
+                continue;
+            }
+        };
+        let Some(name) = metadata["instanceName"].as_str() else { continue; };
+        let Some(version) = metadata["minecraftVersion"].as_str() else { continue; };
+        if safe_instance_name(name).is_ok()
+            && name == entry.file_name().to_string_lossy()
+            && !version.trim().is_empty()
+        {
             instances.push(metadata);
         }
     }
