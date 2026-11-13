@@ -263,10 +263,23 @@ function LocalInstances({ versions, memoryMb, setPage }) {
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
   const [instancePanel,setInstancePanel]=useState(null);
+  const [launchState,setLaunchState]=useState(null);
   const [selectedInstance,setSelectedInstance]=useState(null);
   const [selectedInstanceTab,setSelectedInstanceTab]=useState("content");
   const [showCustom,setShowCustom]=useState(false);
   const [creating,setCreating]=useState(false);
+  useEffect(()=>{
+    let alive=true;
+    let unlisten;
+    listen("nova-game-exit",event=>{
+      if(!alive)return;
+      const payload=event.payload||{};
+      setLaunchState(current=>current&&current.instanceName===payload.instanceName&&current.phase==="running"
+        ?{...current,phase:payload.success?"closed":"crashed",message:payload.success?"Minecraft closed.":"Minecraft exited unexpectedly. Check the logs for the error."}
+        :current);
+    }).then(stop=>{if(alive)unlisten=stop;else stop();}).catch(()=>{});
+    return()=>{alive=false;unlisten?.();};
+  },[]);
   useEffect(()=>{
     let alive=true;
     invoke("list_instances").then(found=>{
@@ -295,16 +308,23 @@ function LocalInstances({ versions, memoryMb, setPage }) {
     }catch(e){setAction(typeof e==="string"?e:(e.message||"Could not create this instance."));}
     finally{setCreating(false);}
   };
-  const playPack=async pack=>{
-    setAction("Preparing "+pack.name+"…");
-    try{await invoke("launch_minecraft",{version:pack.minecraftVersion||pack.version,loader:pack.loader||"vanilla",loaderBuild:pack.loaderVersion||"latest",instanceName:pack.instanceName,memoryMb});setAction(pack.name+" started.");}
-    catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}
+  const combineLogOutput=result=>[
+    result?.launcherLog? "=== NOVA launcher ===\\n"+result.launcherLog:"",
+    result?.minecraftLog? "=== Minecraft game log ===\\n"+result.minecraftLog:""
+  ].filter(Boolean).join("\\n\\n")||"Waiting for Minecraft to create its log file…";
+  const launchInstance=async instance=>{
+    setLaunchState({instanceName:instance.instanceName,phase:"starting",message:"Preparing Minecraft, checking files and starting the game…"});
+    try{
+      await invoke("launch_minecraft",{version:instance.minecraftVersion||instance.version,loader:instance.loader||"vanilla",loaderBuild:instance.loaderVersion||"latest",instanceName:instance.instanceName,memoryMb});
+      setLaunchState({instanceName:instance.instanceName,phase:"running",message:"Minecraft process started. The game is loading; live output is shown below."});
+      setSelectedInstanceTab("logs");
+      openInstancePanel(instance,"logs");
+    }catch(error){
+      setLaunchState({instanceName:instance.instanceName,phase:"failed",message:typeof error==="string"?error:(error.message||"Could not launch this instance.")});
+    }
   };
-  const playCustom=async item=>{
-    setAction("Preparing "+item.name+"…");
-    try{await invoke("launch_minecraft",{version:item.minecraftVersion||item.version,loader:item.loader||"vanilla",loaderBuild:item.loaderVersion||"latest",instanceName:item.instanceName,memoryMb});setAction(item.name+" started.");}
-    catch(e){setAction(typeof e==="string"?e:(e.message||"Could not launch this instance."));}
-  };
+  const playPack=async pack=>launchInstance(pack);
+  const playCustom=async item=>launchInstance(item);
   const openInstancePanel=async(instance,tab)=>{
     setInstancePanel({instance,tab,loading:true,content:[],logs:"",error:""});
     try{
@@ -313,7 +333,7 @@ function LocalInstances({ versions, memoryMb, setPage }) {
         setInstancePanel(current=>current?{...current,loading:false,content:Array.isArray(content)?content:[]}:current);
       }else{
         const result=await invoke("get_game_logs",{instanceName:instance.instanceName});
-        setInstancePanel(current=>current?{...current,loading:false,logs:result?.minecraftLog||"No Minecraft logs found."}:current);
+        setInstancePanel(current=>current?{...current,loading:false,logs:combineLogOutput(result)}:current);
       }
     }catch(error){
       setInstancePanel(current=>current?{...current,loading:false,error:typeof error==="string"?error:(error.message||"Could not load instance data.")}:current);
@@ -330,7 +350,7 @@ function LocalInstances({ versions, memoryMb, setPage }) {
       try{
         const result=await invoke("get_game_logs",{instanceName:instance.instanceName});
         if(active)setInstancePanel(current=>current?.instance?.instanceName===instance.instanceName&&current.tab==="logs"
-          ?{...current,loading:false,error:"",logs:result?.minecraftLog||"No Minecraft logs found."}:current);
+          ?{...current,loading:false,error:"",logs:combineLogOutput(result)}:current);
       }catch(error){
         if(active)setInstancePanel(current=>current?.instance?.instanceName===instance.instanceName&&current.tab==="logs"
           ?{...current,loading:false,error:typeof error==="string"?error:(error.message||"Could not refresh game logs.")}:current);
@@ -371,11 +391,12 @@ function LocalInstances({ versions, memoryMb, setPage }) {
           <div><h2 id="selected-instance-title">{selectedInstance.name}</h2><p><span><Package size={13}/> {selectedInstance.loader||"Minecraft"}</span><i/> {selectedInstance.minecraftVersion} <i/> <span><Clock size={13}/> Installed modpack</span></p></div>
         </div>
         <div className="nova-pack-manager-actions">
-          <button className="primary-btn" onClick={()=>playPack(selectedInstance)}><Play size={15} fill="currentColor"/> Play</button>
+          <button className="primary-btn" onClick={()=>playPack(selectedInstance)} disabled={launchState?.instanceName===selectedInstance.instanceName&&launchState.phase==="starting"}><Play size={15} fill="currentColor"/> {launchState?.instanceName===selectedInstance.instanceName&&launchState.phase==="starting"?"Launching…":"Play"}</button>
           <button className="icon-btn" title="Modpack settings" onClick={()=>setAction("Modpack settings are coming soon.")}><Settings size={17}/></button>
           <button className="icon-btn" title="Close" onClick={()=>setSelectedInstance(null)}><X size={17}/></button>
         </div>
       </div>
+      {launchState?.instanceName===selectedInstance.instanceName&&<div className={"nova-launch-status phase-"+launchState.phase} role="status"><b>{({starting:"STARTING",running:"RUNNING",closed:"CLOSED",crashed:"CRASHED",failed:"FAILED"})[launchState.phase]||"STATUS"}</b><span>{launchState.message}</span></div>}
       <div className="nova-pack-tabs">
         {[[ "content","Content",Package],["files","Files",Folder],["worlds","Worlds",Globe],["logs","Logs",ScrollText],["share","Share",Users]].map(([id,label,Icon])=><button key={id} className={selectedInstanceTab===id?"active":""} onClick={()=>{setSelectedInstanceTab(id);if(id==="content"||id==="files"||id==="logs")openInstancePanel(selectedInstance,id==="logs"?"logs":"content");}}><Icon size={16}/>{label}</button>)}
       </div>
