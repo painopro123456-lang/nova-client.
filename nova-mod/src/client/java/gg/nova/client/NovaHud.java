@@ -33,7 +33,7 @@ public final class NovaHud {
 
     private static void render(GuiGraphicsExtractor graphics,DeltaTracker delta) {
         Minecraft client=Minecraft.getInstance();
-        if(client.player==null||client.level==null||client.screen instanceof NovaMenuScreen)return;
+        if(client.player==null||client.level==null||client.gui.screen() instanceof NovaMenuScreen)return;
         int y=8;
         if(NovaMenuScreen.isEnabled("FPS")) {
             line(graphics,client,"FPS",client.getFps()+" FPS",8,y);y+=18;

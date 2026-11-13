@@ -1,7 +1,7 @@
 package gg.nova.client;
 
 import net.minecraft.client.Minecraft;
-import net.minecraft.client.gui.GuiGraphics;
+import net.minecraft.client.gui.GuiGraphicsExtractor;
 import net.minecraft.client.gui.screens.Screen;
 import net.minecraft.network.chat.Component;
 
@@ -77,14 +77,14 @@ public final class NovaMenuScreen extends Screen {
     }
 
     @Override
-    public void render(GuiGraphics g,int mx,int my,float delta) {
+    public void extractRenderState(GuiGraphicsExtractor g,int mx,int my,float delta) {
         g.fill(0,0,width,height,0xB9000000);
         int pw=Math.min(760,width-40), ph=Math.min(480,height-40), l=(width-pw)/2, t=(height-ph)/2;
         g.fill(l,t,l+pw,t+ph,PANEL);
         g.fill(l,t,l+5,t+ph,ACCENT);
-        g.drawString(font,"NOVA",l+26,t+22,0xFFFFFFFF,false);
-        g.drawString(font,"CLIENT MENU",l+91,t+24,MUTED,false);
-        g.drawString(font,"RIGHT SHIFT  -  CLOSE",l+pw-158,t+25,MUTED,false);
+        g.text(font,"NOVA",l+26,t+22,0xFFFFFFFF,false);
+        g.text(font,"CLIENT MENU",l+91,t+24,MUTED,false);
+        g.text(font,"RIGHT SHIFT  -  CLOSE",l+pw-158,t+25,MUTED,false);
         g.fill(l+20,t+48,l+pw-20,t+49,0xFF303849);
 
         String[] cats={"All","HUD","Visual","Player","Mods"};
@@ -92,34 +92,34 @@ public final class NovaMenuScreen extends Screen {
             int y=t+68+i*35;
             boolean selected=category.equals(cats[i]);
             if(selected)g.fill(l+20,y-5,l+152,y+22,0xFF29233E);
-            g.drawString(font,cats[i],l+30,y+3,selected?ACCENT:0xFFD7DCE8,false);
+            g.text(font,cats[i],l+30,y+3,selected?ACCENT:0xFFD7DCE8,false);
         }
 
         int cx=l+178,cy=t+70,cw=(pw-220)/2;
-        g.drawString(font,category.equals("All")?"Modules":category,cx,cy,0xFFFFFFFF,false);
-        g.drawString(font,"Saved module preferences",cx,cy+17,MUTED,false);
+        g.text(font,category.equals("All")?"Modules":category,cx,cy,0xFFFFFFFF,false);
+        g.text(font,"Saved module preferences",cx,cy+17,MUTED,false);
         int visible=0;
         for(var entry:modules.entrySet()) {
             if(!category.equals("All")&&!category.equals(categories.get(entry.getKey())))continue;
             int col=visible%2,row=visible/2,x=cx+col*(cw+12),y=cy+48+row*72;
             g.fill(x,y,x+cw,y+62,CARD);
-            g.drawString(font,entry.getKey(),x+12,y+13,0xFFFFFFFF,false);
-            g.drawString(font,categories.get(entry.getKey())+" module",x+12,y+34,MUTED,false);
-            g.drawString(font,"⚙",x+cw-19,y+13,0xFFD7DCE8,false);
+            g.text(font,entry.getKey(),x+12,y+13,0xFFFFFFFF,false);
+            g.text(font,categories.get(entry.getKey())+" module",x+12,y+34,MUTED,false);
+            g.text(font,"⚙",x+cw-19,y+13,0xFFD7DCE8,false);
             g.fill(x+cw-56,y+20,x+cw-28,y+34,entry.getValue()?ACCENT:0xFF414A5D);
             g.fill(x+cw-(entry.getValue()?40:54),y+22,x+cw-(entry.getValue()?30:44),y+32,0xFFFFFFFF);
             visible++;
         }
-        if(visible==0)g.drawString(font,"No modules in this category yet.",cx,cy+58,MUTED,false);
+        if(visible==0)g.text(font,"No modules in this category yet.",cx,cy+58,MUTED,false);
 
         if(settingsModule!=null) {
             int sy=t+ph-76;
             g.fill(cx,sy,l+pw-24,sy+50,0xFF242B3B);
-            g.drawString(font,"SETTINGS  ·  "+settingsModule,cx+12,sy+8,0xFFFFFFFF,false);
-            g.drawString(font,"Background: "+(hasBackground(settingsModule)?"ON":"OFF")+"  ·  CLICK TO CHANGE",cx+12,sy+27,MUTED,false);
+            g.text(font,"SETTINGS  ·  "+settingsModule,cx+12,sy+8,0xFFFFFFFF,false);
+            g.text(font,"Background: "+(hasBackground(settingsModule)?"ON":"OFF")+"  ·  CLICK TO CHANGE",cx+12,sy+27,MUTED,false);
         }
-        g.drawString(font,"NOVA IN-GAME  -  EARLY DEVELOPMENT",l+26,t+ph-24,MUTED,false);
-        super.render(g,mx,my,delta);
+        g.text(font,"NOVA IN-GAME  -  EARLY DEVELOPMENT",l+26,t+ph-24,MUTED,false);
+        super.extractRenderState(g,mx,my,delta);
     }
 
     @Override

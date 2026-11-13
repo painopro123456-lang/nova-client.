@@ -14,8 +14,8 @@ public final class NovaClient implements ClientModInitializer {
         NovaHud.register();
         ClientTickEvents.END_CLIENT_TICK.register(client->{
             while(openMenuKey.consumeClick()){
-                if(client.screen instanceof NovaMenuScreen)client.setScreen(null);
-                else if(client.player!=null)client.setScreen(new NovaMenuScreen());
+                if(client.gui.screen() instanceof NovaMenuScreen)client.gui.setScreen(null);
+                else if(client.player!=null)client.gui.setScreen(new NovaMenuScreen());
             }
         });
     }
