@@ -41,7 +41,7 @@ jobs:
 
       - name: Install dependencies
         working-directory: D:/a/nova-src
-        run: npm install
+        run: npm ci
 
       - name: Generate Windows app icon
         shell: pwsh
