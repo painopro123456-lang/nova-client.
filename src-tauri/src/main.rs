@@ -1,46 +1,487 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use crust_core::authenticator::{Account, Authenticator};
+use crust_core::foundation::events::Event;
 use crust_core::launcher::{Launch, LaunchOptions, LoaderKind};
-use keyring::Entry;
 use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
 use serde_json::{json, Value};
 use sha1::{Digest, Sha1};
-use std::io::{BufRead, BufReader, Cursor, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
+use std::fs::OpenOptions;
 use std::net::TcpListener;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
-use std::time::{Duration, Instant};
+use std::sync::{Arc, Mutex, OnceLock, atomic::{AtomicU64, Ordering}};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use zip::ZipArchive;
 use tauri::Emitter;
 
-const KEYRING_SERVICE: &str = "NOVA Client";
-const MINECRAFT_ACCOUNT_USER: &str = "minecraft-account";
 const CURSEFORGE_API: &str = "https://api.curseforge.com/v1";
 const MICROSOFT_CLIENT_ID: &str = "09e6a2a2-90ee-47a6-92c4-f8810958de91";
+
+const NOVA_RELEASES_API: &str = "https://api.github.com/repos/painopro123456-lang/nova-client./releases/latest";
+const NOVA_INSTALLER_ASSET: &str = "NOVA-Client-Setup.exe";
+const MAX_UPDATER_DOWNLOAD_BYTES: u64 = 200 * 1024 * 1024;
+
+fn logs_directory() -> PathBuf {
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
+    base.join("NOVA Client").join("logs")
+}
+
+fn updater_log_path() -> PathBuf {
+    logs_directory().join("updater.log")
+}
+
+fn game_log_path() -> PathBuf {
+    logs_directory().join("game-launch.log")
+}
+
+fn game_log(message: &str) {
+    let path = game_log_path();
+    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let safe_message = message.replace('\r', " ").replace('\n', " ");
+        let _ = writeln!(file, "[unix:{timestamp}] {safe_message}");
+    }
+}
+
+fn reset_log_file(path: &Path) -> Result<(), String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Could not prepare log folder {}: {e}", parent.display()))?;
+    }
+    std::fs::write(path, "")
+        .map_err(|e| format!("Could not reset log file {}: {e}", path.display()))
+}
+
+fn reset_logs_for_launch(game_root: &Path, instance_name: Option<&str>) -> Result<(), String> {
+    // Start a fresh launcher session log for every game launch.
+    reset_log_file(&game_log_path())?;
+
+    // Clear only the active profile's latest log (and the shared fallback log
+    // used by older launcher-core layouts). Mods, worlds, and saves are untouched.
+    if let Some(name) = instance_name {
+        let safe_name = safe_instance_name(name)?;
+        let instance_logs = game_root.join("instances").join(safe_name).join("logs");
+        reset_log_file(&instance_logs.join("latest.log"))?;
+        reset_log_file(&instance_logs.join("debug.log"))?;
+    }
+    let shared_logs = game_root.join("logs");
+    reset_log_file(&shared_logs.join("latest.log"))?;
+    reset_log_file(&shared_logs.join("debug.log"))?;
+    Ok(())
+}
+
+fn tail_file(path: &Path, max_lines: usize) -> String {
+    match std::fs::read_to_string(path) {
+        Ok(contents) => {
+            let lines: Vec<&str> = contents.lines().collect();
+            let start = lines.len().saturating_sub(max_lines);
+            lines[start..].join("\n")
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => "No Minecraft log has been created yet. Launch the game once to generate logs/latest.log.".into(),
+        Err(error) => format!("Could not read log file {}: {error}", path.display()),
+    }
+}
+
+#[tauri::command]
+fn get_game_logs(instance_name: Option<String>) -> Result<Value, String> {
+    let local_app_data = std::env::var("LOCALAPPDATA")
+        .map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
+    let root = PathBuf::from(local_app_data).join("NOVA Client").join("minecraft");
+    let mut minecraft_sections = Vec::new();
+    let mut minecraft_paths = Vec::new();
+
+    if let Some(name) = instance_name.as_deref() {
+        let safe_name = safe_instance_name(name)?;
+        let instance_logs = root.join("instances").join(&safe_name).join("logs");
+        let shared_logs = root.join("logs");
+        // CrustCore normally writes to instances/<name>/logs. Keep the shared
+        // game-root paths as a fallback for profiles created by older builds.
+        let mut candidates = vec![
+            instance_logs.join("latest.log"),
+            instance_logs.join("debug.log"),
+            shared_logs.join("latest.log"),
+            shared_logs.join("debug.log"),
+        ];
+        candidates.retain(|path| path.is_file());
+        candidates.sort_by_key(|path| {
+            std::fs::metadata(path).and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH)
+        });
+
+        for path in candidates.iter() {
+            let contents = tail_file(path, 1200);
+            if contents.trim().is_empty() { continue; }
+            let filename = path.file_name().and_then(|value| value.to_str()).unwrap_or("Minecraft log");
+            minecraft_sections.push(format!("=== {} · {} ===\n{}", name, filename, contents));
+            minecraft_paths.push(path.display().to_string());
+        }
+
+        if minecraft_sections.is_empty() {
+            let any_log_file = [
+                instance_logs.join("latest.log"),
+                instance_logs.join("debug.log"),
+                shared_logs.join("latest.log"),
+                shared_logs.join("debug.log"),
+            ].iter().any(|path| path.is_file());
+            let expected = instance_logs.join("latest.log").display().to_string();
+            minecraft_sections.push(if any_log_file {
+                format!("Minecraft log files exist but are still empty. Waiting for the game to write output.\nExpected instance log: {expected}")
+            } else {
+                format!("No Minecraft log has been created for this instance yet. Start the modpack and keep this tab open.\nExpected instance log: {expected}")
+            });
+            minecraft_paths.push(expected);
+        }
+    } else {
+        let default_logs = root.join("logs");
+        for filename in ["latest.log", "debug.log"] {
+            let path = default_logs.join(filename);
+            if path.is_file() {
+                let contents = tail_file(&path, 1200);
+                if !contents.trim().is_empty() {
+                    minecraft_sections.push(format!("=== Default Minecraft · {} ===\n{}", filename, contents));
+                    minecraft_paths.push(path.display().to_string());
+                }
+            }
+        }
+        let instances_dir = root.join("instances");
+        if let Ok(entries) = std::fs::read_dir(&instances_dir) {
+            for entry in entries.flatten().take(30) {
+                if !entry.file_type().is_ok_and(|kind| kind.is_dir()) { continue; }
+                let logs_dir = entry.path().join("logs");
+                for filename in ["latest.log", "debug.log"] {
+                    let path = logs_dir.join(filename);
+                    if path.is_file() {
+                        let contents = tail_file(&path, 600);
+                        if !contents.trim().is_empty() {
+                            minecraft_sections.push(format!("=== Instance {} · {} ===\n{}", entry.file_name().to_string_lossy(), filename, contents));
+                            minecraft_paths.push(path.display().to_string());
+                        }
+                    }
+                }
+            }
+        }
+        if minecraft_sections.is_empty() {
+            minecraft_sections.push("No Minecraft latest.log or debug.log files have been created yet. Launch a profile to generate its game logs.".into());
+        }
+    }
+
+    Ok(json!({
+        "launcherLog": tail_file(&game_log_path(), 500),
+        "minecraftLog": minecraft_sections.join("\n\n"),
+        "launcherLogPath": game_log_path().display().to_string(),
+        "minecraftLogPath": if minecraft_paths.is_empty() { "Minecraft logs".to_owned() } else { minecraft_paths.join(" | ") }
+    }))
+}
+#[cfg(windows)]
+fn safe_minecraft_memory_mb(requested: u32) -> u32 {
+    use winapi::um::sysinfoapi::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status: MEMORYSTATUSEX = unsafe { std::mem::zeroed() };
+    status.dwLength = std::mem::size_of::<MEMORYSTATUSEX>() as u32;
+    let ok = unsafe { GlobalMemoryStatusEx(&mut status) };
+    if ok == 0 {
+        return requested.clamp(1024, 2048);
+    }
+    let mib = 1024 * 1024;
+    let total_mb = (status.ullTotalPhys / mib) as u32;
+    let available_mb = (status.ullAvailPhys / mib) as u32;
+    // Keep at least half of physical RAM for Windows, drivers and background apps,
+    // and avoid allocating memory that is not currently available.
+    let total_limit = (total_mb / 2).max(1024);
+    let available_limit = available_mb.saturating_sub(1024).max(1024);
+    requested.clamp(1024, total_limit.min(available_limit).min(8192))
+}
+
+#[cfg(not(windows))]
+fn safe_minecraft_memory_mb(requested: u32) -> u32 {
+    requested.clamp(1024, 8192)
+}
+
+fn log_latest_crash_report(game_root: &Path, instance_name: Option<&str>) {
+    let mut directories = Vec::new();
+    if let Some(name) = instance_name {
+        if let Ok(name) = safe_instance_name(name) {
+            directories.push(game_root.join("instances").join(name).join("crash-reports"));
+        }
+    }
+    directories.push(game_root.join("crash-reports"));
+    let newest = directories.iter().filter_map(|directory| {
+        std::fs::read_dir(directory).ok()?.flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if !path.is_file() || !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("txt")) {
+                    return None;
+                }
+                let modified = entry.metadata().ok()?.modified().ok()?;
+                Some((modified, path))
+            })
+            .max_by_key(|(modified, _)| *modified)
+    }).max_by_key(|(modified, _)| *modified);
+    if let Some((_, path)) = newest {
+        match std::fs::read_to_string(&path) {
+            Ok(contents) => {
+                let mut lines: Vec<&str> = contents.lines().rev().take(45).collect();
+                lines.reverse();
+                game_log(&format!("Minecraft crash report found at {}. Last report lines:\n{}", path.display(), lines.join("\n")));
+            }
+            Err(error) => game_log(&format!("Minecraft crash report exists at {}, but could not be read: {error}", path.display())),
+        }
+    } else {
+        game_log("Minecraft exited unsuccessfully, but no crash report was found in the instance or shared crash-reports folder.");
+    }
+}
+
+fn game_event_logger() -> Arc<dyn Fn(Event) + Send + Sync> {
+    let last_progress = Mutex::new(Instant::now() - Duration::from_secs(2));
+    Arc::new(move |event| match event {
+        Event::Progress { downloaded, total, element } => {
+            if let Ok(mut last) = last_progress.lock() {
+                if last.elapsed() >= Duration::from_secs(2) || (total > 0 && downloaded >= total) {
+                    game_log(&format!("Download: {element} ({downloaded}/{total} bytes)"));
+                    *last = Instant::now();
+                }
+            }
+        }
+        Event::Check { checked, total, element } => {
+            if checked == total || checked % 500 == 0 {
+                game_log(&format!("Check: {element} ({checked}/{total})"));
+            }
+        }
+        Event::Extract(message) => game_log(&format!("Extract: {message}")),
+        Event::Patch(message) => game_log(&format!("Patch: {message}")),
+        Event::Error(message) => game_log(&format!("Launcher error: {message}")),
+        Event::Speed(_) | Event::Estimated(_) => {}
+    })
+}
+
+fn updater_log(message: &str) {
+    let path = updater_log_path();
+    if let Some(parent) = path.parent() { let _ = std::fs::create_dir_all(parent); }
+    let timestamp = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(path) {
+        let safe_message = message.replace('\r', " ").replace('\n', " ");
+        let _ = writeln!(file, "[unix:{timestamp}] {safe_message}");
+    }
+}
+
+#[tauri::command]
+fn get_updater_logs() -> Result<String, String> {
+    match std::fs::read_to_string(updater_log_path()) {
+        Ok(contents) => {
+            let lines: Vec<&str> = contents.lines().collect();
+            let start = lines.len().saturating_sub(250);
+            Ok(lines[start..].join("\n"))
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("No updater activity has been logged yet.".into()),
+        Err(error) => Err(format!("Could not read updater log: {error}")),
+    }
+}
+
+fn version_is_newer(latest: &str, current: &str) -> bool {
+    let parse = |value: &str| -> Option<Vec<u64>> {
+        value.trim_start_matches('v').split('.').map(|part| part.parse::<u64>().ok()).collect()
+    };
+    match (parse(latest), parse(current)) {
+        (Some(latest), Some(current)) => {
+            let length = latest.len().max(current.len());
+            (0..length).map(|i| *latest.get(i).unwrap_or(&0))
+                .cmp((0..length).map(|i| *current.get(i).unwrap_or(&0))).is_gt()
+        }
+        _ => false,
+    }
+}
+
+async fn latest_nova_release() -> Result<Value, String> {
+    let client = http_client()?;
+    let response = client.get(NOVA_RELEASES_API)
+        .header("User-Agent", "NOVA-Client-Updater")
+        .header(ACCEPT, "application/vnd.github+json")
+        .send().await.map_err(|e| format!("Could not check NOVA updates: {e}"))?
+        .error_for_status().map_err(|e| format!("GitHub could not provide the latest NOVA release: {e}"))?;
+    response.json::<Value>().await.map_err(|e| format!("GitHub returned invalid update information: {e}"))
+}
+
+fn release_installer_url(release: &Value) -> Result<String, String> {
+    let assets = release["assets"].as_array().ok_or("The latest NOVA release has no installer assets.")?;
+    let asset = assets.iter().find(|asset| asset["name"].as_str() == Some(NOVA_INSTALLER_ASSET))
+        .ok_or("The latest NOVA release is missing NOVA-Client-Setup.exe.")?;
+    let size = asset["size"].as_u64().ok_or("The NOVA installer size is missing.")?;
+    if size == 0 || size > MAX_UPDATER_DOWNLOAD_BYTES {
+        return Err("The NOVA installer size is invalid or exceeds the 200 MiB safety limit.".into());
+    }
+    let url = asset["browser_download_url"].as_str().ok_or("The NOVA installer download link is missing.")?;
+    let parsed = reqwest::Url::parse(url).map_err(|_| "The NOVA installer download link is invalid.")?;
+    if parsed.scheme() != "https" || parsed.host_str() != Some("github.com") {
+        return Err("The NOVA installer link is not a trusted GitHub HTTPS release URL.".into());
+    }
+    Ok(url.to_owned())
+}
+
+#[tauri::command]
+async fn check_for_updates() -> Result<Value, String> {
+    updater_log("Update check started.");
+    let result = check_for_updates_inner().await;
+    match &result {
+        Ok(info) => updater_log(&format!("Update check completed: current={}, latest={}, available={}.",
+            info["currentVersion"].as_str().unwrap_or("unknown"),
+            info["latestVersion"].as_str().unwrap_or("unknown"),
+            info["available"].as_bool().unwrap_or(false))),
+        Err(error) => updater_log(&format!("Update check failed: {error}")),
+    }
+    result
+}
+
+async fn check_for_updates_inner() -> Result<Value, String> {
+    let current = env!("CARGO_PKG_VERSION");
+    // A 404 from /releases/latest means the repository has not published
+    // a GitHub Release yet. Treat that as "not published", not as an updater
+    // failure; real network/API errors must still be surfaced.
+    let client = http_client()?;
+    let response = client.get(NOVA_RELEASES_API)
+        .header("User-Agent", "NOVA-Client-Updater")
+        .header(ACCEPT, "application/vnd.github+json")
+        .send().await.map_err(|e| format!("Could not check NOVA updates: {e}"))?;
+    if response.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(json!({
+            "currentVersion": current,
+            "latestVersion": current,
+            "available": false,
+            "releasePublished": false,
+            "releaseNotes": "NOVA has not published a GitHub release yet. Automatic updates will be available after the first release is published.",
+            "publishedAt": "",
+            "downloadUrl": null
+        }));
+    }
+    let release: Value = response.error_for_status()
+        .map_err(|e| format!("GitHub could not provide the latest NOVA release: {e}"))?
+        .json().await.map_err(|e| format!("GitHub returned invalid update information: {e}"))?;
+    let latest = release["tag_name"].as_str().ok_or("The latest NOVA release has no version tag.")?
+        .trim_start_matches('v').to_owned();
+    let available = version_is_newer(&latest, current);
+    let download_url = if available { Some(release_installer_url(&release)?) } else { None };
+    Ok(json!({
+        "currentVersion": current,
+        "latestVersion": latest,
+        "available": available,
+        "releasePublished": true,
+        "releaseNotes": release["body"].as_str().unwrap_or("No release notes were provided."),
+        "publishedAt": release["published_at"].as_str().unwrap_or(""),
+        "downloadUrl": download_url
+    }))
+}
+
+#[tauri::command]
+async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    updater_log("Update installation started.");
+    let result = install_update_inner(app).await;
+    if let Err(error) = &result { updater_log(&format!("Update installation failed: {error}")); }
+    result
+}
+
+async fn install_update_inner(app: tauri::AppHandle) -> Result<(), String> {
+    let release = latest_nova_release().await?;
+    let latest = release["tag_name"].as_str().ok_or("The latest NOVA release has no version tag.")?
+        .trim_start_matches('v');
+    if !version_is_newer(latest, env!("CARGO_PKG_VERSION")) {
+        return Err("NOVA is already up to date.".into());
+    }
+    updater_log(&format!("Downloading NOVA version {latest}."));
+    let url = release_installer_url(&release)?;
+    let client = http_client()?;
+    let response = client.get(&url).header("User-Agent", "NOVA-Client-Updater")
+        .send().await.map_err(|e| format!("Could not download the NOVA update: {e}"))?
+        .error_for_status().map_err(|e| format!("The NOVA installer download failed: {e}"))?;
+    if response.content_length().is_some_and(|size| size == 0 || size > MAX_UPDATER_DOWNLOAD_BYTES) {
+        return Err("The downloaded NOVA installer has an invalid size.".into());
+    }
+    let bytes = response.bytes().await.map_err(|e| format!("Could not read the NOVA installer: {e}"))?;
+    if bytes.is_empty() || bytes.len() as u64 > MAX_UPDATER_DOWNLOAD_BYTES {
+        return Err("The downloaded NOVA installer is empty or exceeds the 200 MiB safety limit.".into());
+    }
+    updater_log(&format!("Installer download complete: {} bytes.", bytes.len()));
+    let installer = std::env::temp_dir().join(format!("NOVA-Client-Update-{}.exe", std::process::id()));
+    std::fs::write(&installer, &bytes).map_err(|e| format!("Could not save the NOVA installer: {e}"))?;
+
+    // A small detached PowerShell helper waits for NOVA to exit, runs the
+    // NSIS installer silently, then relaunches the same installed executable.
+    // If setup fails, it still reopens the existing launcher.
+    let executable = std::env::current_exe()
+        .map_err(|e| format!("Could not locate the installed NOVA launcher: {e}"))?;
+    let quote_ps = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "''"));
+    let script = std::env::temp_dir().join(format!("NOVA-Client-Update-{}.ps1", std::process::id()));
+    let script_contents = format!(
+        "$ErrorActionPreference = 'Continue'\n$launcherPid = {}\nwhile (Get-Process -Id $launcherPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 300 }}\n$setup = Start-Process -FilePath {} -ArgumentList '/S' -Wait -PassThru\nStart-Process -FilePath {}\nRemove-Item -LiteralPath $PSCommandPath -Force\n",
+        std::process::id(), quote_ps(&installer), quote_ps(&executable)
+    );
+    std::fs::write(&script, script_contents)
+        .map_err(|e| format!("Could not prepare the NOVA restart helper: {e}"))?;
+    if let Err(error) = std::process::Command::new("powershell.exe")
+        .args(["-NoProfile", "-WindowStyle", "Hidden", "-ExecutionPolicy", "Bypass", "-File"])
+        .arg(&script)
+        .spawn()
+    {
+        let _ = std::fs::remove_file(&script);
+        return Err(format!("Could not start the NOVA update helper: {error}"));
+    }
+    updater_log("Update downloaded. Closing NOVA; the installer will run silently and reopen the launcher.");
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    app.exit(0);
+    Ok(())
+}
 
 static AUTH_REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn refresh_saved_minecraft_account(saved_account: &Account) -> Result<Account, String> {
     let _refresh_guard = AUTH_REFRESH_LOCK.lock().await;
-    let auth = Authenticator::new()
+    // Refresh with the same public client ID used for the original OAuth/PKCE
+    // sign-in. Using Authenticator::new() here switches client IDs and can make
+    // a valid saved Microsoft refresh token look like the user is signed out.
+    let auth = Authenticator::with_client_id(MICROSOFT_CLIENT_ID)
         .map_err(|e| format!("Could not prepare Microsoft account refresh: {e}"))?;
+    game_log("Refreshing saved Microsoft/Minecraft session.");
     let account = auth.refresh(saved_account).await
-        .map_err(|e| format!("Microsoft session expired or could not be refreshed. Sign in again: {e}"))?;
-    let refreshed_json = serde_json::to_string(&account)
-        .map_err(|e| format!("Could not update the saved account: {e}"))?;
-    credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .set_password(&refreshed_json)
-        .map_err(|e| format!("Could not update the secure account store: {e}"))?;
+        .map_err(|e| {
+            game_log(&format!("Microsoft session refresh failed: {e}"));
+            format!("Microsoft session could not be refreshed. Sign in again: {e}")
+        })?;
+    game_log("Saved Microsoft/Minecraft session refreshed successfully.");
+    save_minecraft_account(&account)?;
     Ok(account)
 }
 
 const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 const MAX_ARCHIVE_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+const MAX_PACK_MANIFEST_BYTES: u64 = 16 * 1024 * 1024;
 static ACTIVE_LAUNCHES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
-static ACTIVE_PROCESS_IDS: OnceLock<Mutex<std::collections::HashMap<String, u32>>> = OnceLock::new();
+static ACTIVE_GAME_PIDS: OnceLock<Mutex<std::collections::HashMap<String, u32>>> = OnceLock::new();
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+
+struct InstanceReservation {
+    name: String,
+}
+
+impl InstanceReservation {
+    fn acquire(name: String) -> Result<Self, String> {
+        let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+        let mut operations = active.lock().map_err(|_| "Could not inspect active Minecraft operations.")?;
+        if !operations.insert(name.clone()) {
+            return Err("This instance is already running or another operation is using it.".into());
+        }
+        Ok(Self { name })
+    }
+}
+
+impl Drop for InstanceReservation {
+    fn drop(&mut self) {
+        if let Some(active) = ACTIVE_LAUNCHES.get() {
+            if let Ok(mut operations) = active.lock() {
+                operations.remove(&self.name);
+            }
+        }
+    }
+}
 
 fn http_client() -> Result<reqwest::Client, String> {
     reqwest::Client::builder()
@@ -50,9 +491,167 @@ fn http_client() -> Result<reqwest::Client, String> {
         .map_err(|e| format!("Could not initialize secure network client: {e}"))
 }
 
-fn credential_entry(user: &str) -> Result<Entry, String> {
-    Entry::new(KEYRING_SERVICE, user)
-        .map_err(|e| format!("Windows Credential Manager is unavailable: {e}"))
+fn download_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        // Large modpacks can take longer than five minutes on slower connections.
+        .timeout(Duration::from_secs(1800))
+        .build()
+        .map_err(|e| format!("Could not initialize the download client: {e}"))
+}
+
+fn is_curseforge_cdn_host(host: &str) -> bool {
+    matches!(host, "edge.forgecdn.net" | "mediafilez.forgecdn.net")
+}
+
+fn is_curseforge_cdn_url(url: &str) -> bool {
+    reqwest::Url::parse(url).ok()
+        .is_some_and(|parsed| parsed.scheme() == "https"
+            && parsed.host_str().is_some_and(is_curseforge_cdn_host))
+}
+
+fn curseforge_download_client() -> Result<reqwest::Client, String> {
+    reqwest::Client::builder()
+        .connect_timeout(Duration::from_secs(15))
+        .timeout(Duration::from_secs(1800))
+        // CurseForge can move a file from edge.forgecdn.net to its mediafilez
+        // CDN. Follow only redirects between these exact trusted hosts so the
+        // API key is never forwarded to an unrelated domain.
+        .redirect(reqwest::redirect::Policy::custom(|attempt| {
+            let next_host = attempt.url().host_str().unwrap_or("");
+            let previous_host = attempt.previous().last()
+                .and_then(|previous| previous.host_str()).unwrap_or("");
+            if next_host == previous_host
+                || (is_curseforge_cdn_host(next_host) && is_curseforge_cdn_host(previous_host)) {
+                attempt.follow()
+            } else {
+                attempt.stop()
+            }
+        }))
+        .build()
+        .map_err(|e| format!("Could not initialize the authenticated CurseForge download client: {e}"))
+}
+
+// Microsoft refresh tokens are stored in NOVA's own app-data folder and
+// protected with Windows DPAPI. This does not create or read Credential Manager
+// entries and does not display any Windows credential prompts.
+#[cfg(windows)]
+fn account_store_path() -> Result<PathBuf, String> {
+    let base = std::env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| "Windows app-data folder could not be found.".to_string())?;
+    Ok(base.join("NOVA Client").join("auth").join("account.dat"))
+}
+
+#[cfg(windows)]
+fn protect_account_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
+    use winapi::um::dpapi::CryptProtectData;
+    use winapi::um::wincrypt::DATA_BLOB;
+    const CRYPTPROTECT_UI_FORBIDDEN: u32 = 0x1;
+    use winapi::um::winbase::LocalFree;
+    use winapi::um::errhandlingapi::GetLastError;
+    use std::ptr::null_mut;
+
+    let mut source = DATA_BLOB { cbData: input.len() as u32, pbData: input.as_ptr() as *mut u8 };
+    let mut output = DATA_BLOB { cbData: 0, pbData: null_mut() };
+    let ok = unsafe {
+        CryptProtectData(&mut source, std::ptr::null(), null_mut(), null_mut(), null_mut(),
+            CRYPTPROTECT_UI_FORBIDDEN, &mut output)
+    };
+    if ok == 0 {
+        return Err(format!("Windows could not encrypt NOVA's account data (error {}).", unsafe { GetLastError() }));
+    }
+    let encrypted = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+    unsafe { LocalFree(output.pbData as *mut _) };
+    Ok(encrypted)
+}
+
+#[cfg(windows)]
+fn unprotect_account_bytes(input: &[u8]) -> Result<Vec<u8>, String> {
+    use winapi::um::dpapi::CryptUnprotectData;
+    use winapi::um::wincrypt::DATA_BLOB;
+    use winapi::um::winbase::LocalFree;
+    use winapi::um::errhandlingapi::GetLastError;
+    use std::ptr::null_mut;
+
+    let mut source = DATA_BLOB { cbData: input.len() as u32, pbData: input.as_ptr() as *mut u8 };
+    let mut output = DATA_BLOB { cbData: 0, pbData: null_mut() };
+    let ok = unsafe {
+        CryptUnprotectData(&mut source, null_mut(), null_mut(), null_mut(), null_mut(), 0, &mut output)
+    };
+    if ok == 0 {
+        return Err(format!("Windows could not decrypt NOVA's saved account (error {}). Sign in again to save a fresh session.", unsafe { GetLastError() }));
+    }
+    let decrypted = unsafe { std::slice::from_raw_parts(output.pbData, output.cbData as usize).to_vec() };
+    unsafe { LocalFree(output.pbData as *mut _) };
+    Ok(decrypted)
+}
+
+#[cfg(windows)]
+fn save_minecraft_account(account: &Account) -> Result<(), String> {
+    let json = serde_json::to_vec(account)
+        .map_err(|e| format!("Could not prepare the Microsoft account for saving: {e}"))?;
+    let encrypted = protect_account_bytes(&json)?;
+    let path = account_store_path()?;
+    let parent = path.parent().ok_or("NOVA account folder is invalid.")?;
+    std::fs::create_dir_all(parent)
+        .map_err(|e| format!("Could not create NOVA's private account folder: {e}"))?;
+    let temporary = parent.join(format!("account-{}.tmp", std::process::id()));
+    std::fs::write(&temporary, encrypted)
+        .map_err(|e| format!("Could not save NOVA's encrypted account file: {e}"))?;
+    if path.exists() {
+        std::fs::remove_file(&path)
+            .map_err(|e| format!("Could not replace NOVA's previous saved account: {e}"))?;
+    }
+    std::fs::rename(&temporary, &path)
+        .map_err(|e| format!("Could not finish saving NOVA's encrypted account: {e}"))?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn load_minecraft_account() -> Result<Option<Account>, String> {
+    let path = account_store_path()?;
+    let encrypted = match std::fs::read(path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(format!("Could not read NOVA's saved account file: {error}")),
+    };
+    let decrypted = unprotect_account_bytes(&encrypted)?;
+    let account = serde_json::from_slice(&decrypted)
+        .map_err(|e| format!("NOVA's saved Microsoft session is invalid: {e}. Sign in again."))?;
+    Ok(Some(account))
+}
+
+#[cfg(windows)]
+fn delete_minecraft_account() -> Result<(), String> {
+    let path = account_store_path()?;
+    match std::fs::remove_file(path) {
+        Ok(()) => Ok(()),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(error) => Err(format!("Could not remove NOVA's saved account: {error}")),
+    }
+}
+
+#[cfg(not(windows))]
+fn save_minecraft_account(_: &Account) -> Result<(), String> {
+    Err("NOVA's encrypted account storage is currently supported on Windows only.".into())
+}
+#[cfg(not(windows))]
+fn load_minecraft_account() -> Result<Option<Account>, String> {
+    Err("NOVA's encrypted account storage is currently supported on Windows only.".into())
+}
+#[cfg(not(windows))]
+fn delete_minecraft_account() -> Result<(), String> {
+    Err("NOVA's encrypted account storage is currently supported on Windows only.".into())
+}
+
+fn read_saved_minecraft_account_json(context: &str) -> Result<String, String> {
+    let account = load_minecraft_account()?.ok_or_else(|| {
+        game_log(&format!("{context}: no NOVA account file exists; user must sign in."));
+        "No Microsoft account is signed in to NOVA. Click Sign in with Microsoft, then try again.".to_string()
+    })?;
+    serde_json::to_string(&account)
+        .map_err(|e| format!("Could not read NOVA's saved Microsoft account: {e}"))
 }
 
 // The approved NOVA key is injected by GitHub Actions at compile time.
@@ -133,8 +732,10 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
 
     app.emit("nova-login-link", login_url.clone())
         .map_err(|e| format!("Could not show the Microsoft sign-in link: {e}"))?;
-    webbrowser::open(&login_url)
-        .map_err(|e| format!("Could not open the Microsoft sign-in page: {e}"))?;
+    // Browser launch can be blocked by Windows policy or a custom browser handler.
+    // The frontend already received the URL, so keep the callback listener alive and
+    // let the user open the displayed link manually instead of aborting sign-in.
+    let _ = webbrowser::open(&login_url);
 
     let redirect_url = tokio::task::spawn_blocking(move || -> Result<String, String> {
         listener.set_nonblocking(true)
@@ -180,11 +781,7 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
     // AuthorizeRequest validates the OAuth state and PKCE verifier before exchanging the code.
     let account = request.login(&auth, &redirect_url).await
         .map_err(|e| format!("Microsoft sign-in failed: {e}"))?;
-    let account_json = serde_json::to_string(&account)
-        .map_err(|e| format!("Could not prepare the signed-in account: {e}"))?;
-    credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .set_password(&account_json)
-        .map_err(|e| format!("Could not securely save the Minecraft account: {e}"))?;
+    save_minecraft_account(&account)?;
 
     app.emit("nova-login-complete", account.name.clone())
         .map_err(|e| format!("Signed in, but could not update NOVA: {e}"))?;
@@ -193,25 +790,12 @@ async fn begin_microsoft_login(app: tauri::AppHandle) -> Result<String, String> 
 
 #[tauri::command]
 fn minecraft_account_name() -> Result<Option<String>, String> {
-    let entry = credential_entry(MINECRAFT_ACCOUNT_USER)?;
-    match entry.get_password() {
-        Ok(value) => {
-            let account: Account = serde_json::from_str(&value)
-                .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
-            Ok(Some(account.name))
-        }
-        Err(keyring::Error::NoEntry) => Ok(None),
-        Err(e) => Err(format!("Could not read the saved Minecraft account: {e}")),
-    }
+    Ok(load_minecraft_account()?.map(|account| account.name))
 }
 
 #[tauri::command]
 fn sign_out_minecraft() -> Result<(), String> {
-    match credential_entry(MINECRAFT_ACCOUNT_USER)?.delete_credential() {
-        Ok(()) => Ok(()),
-        Err(keyring::Error::NoEntry) => Ok(()),
-        Err(e) => Err(format!("Could not remove the saved Minecraft account: {e}")),
-    }
+    delete_minecraft_account()
 }
 
 #[tauri::command]
@@ -230,6 +814,7 @@ async fn minecraft_versions() -> Result<Value, String> {
 #[tauri::command]
 async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _reservation = InstanceReservation::acquire(name.clone())?;
     let folder = instance_folder(&name)?;
     let metadata: Value = serde_json::from_slice(
         &std::fs::read(folder.join("nova-instance.json"))
@@ -244,9 +829,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
     emit_pack_progress(&app, "preparing", 0, 0, "Preparing Minecraft, Java and mod loader");
     // Preparing a modpack installs Minecraft, Java, libraries, assets and its loader
     // into the selected instance without starting the game.
-    let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .get_password()
-        .map_err(|_| "Sign in with Microsoft before completing the modpack installation.".to_string())?;
+    let account_json = read_saved_minecraft_account_json("Modpack preparation")?;
     let saved_account: Account = serde_json::from_str(&account_json)
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
     let account = refresh_saved_minecraft_account(&saved_account).await?;
@@ -258,7 +841,7 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
     std::fs::create_dir_all(&game_root)
         .map_err(|e| format!("Could not create the Minecraft game folder: {e}"))?;
 
-    let mut options = LaunchOptions::new(game_root, version.clone());
+    let mut options = LaunchOptions::new(game_root.clone(), version.clone());
     options.instance = Some(name.clone());
     match loader.as_str() {
         "vanilla" => {}
@@ -275,12 +858,18 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
     }
     // Modpack preparation installs files only; RAM allocation is applied when the
     // user launches the instance.
-    options.download_concurrency = 8;
+    options.download_concurrency = 6;
 
+    game_log(&format!("Preparing modpack instance '{name}' for Minecraft {version} ({loader})."));
     let launch = Launch::new(options, account)
-        .map_err(|e| format!("Could not prepare modpack installation: {e}"))?;
+        .map_err(|e| format!("Could not prepare modpack installation: {e}"))?
+        .with_events(game_event_logger());
     launch.prepare().await
-        .map_err(|e| format!("Minecraft or mod-loader installation failed: {e}"))?;
+        .map_err(|e| {
+            game_log(&format!("Modpack Minecraft preparation failed: {e}"));
+            format!("Minecraft or mod-loader installation failed: {e}")
+        })?;
+    game_log(&format!("Modpack instance '{name}' is prepared."));
     emit_pack_progress(&app, "ready", 1, 1, "Minecraft and mod loader are ready");
 
     Ok(json!({
@@ -295,6 +884,13 @@ async fn prepare_modpack_instance(app: tauri::AppHandle, instance_name: String) 
 #[tauri::command]
 async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option<String>, loader_build: Option<String>, instance_name: Option<String>, memory_mb: Option<u32>) -> Result<(), String> {
     let mut version = version.trim().to_owned();
+    let launch_key = if let Some(instance) = instance_name.as_deref() {
+        safe_instance_name(instance)?
+    } else {
+        format!("default-{version}")
+    };
+    // Reserve before reading metadata so delete/install cannot race the launch setup.
+    let reservation = InstanceReservation::acquire(launch_key.clone())?;
     let mut loader = loader.unwrap_or_else(|| "vanilla".to_owned());
     let mut loader_build = loader_build.unwrap_or_else(|| "latest".to_owned());
     if let Some(instance) = instance_name.as_deref() {
@@ -324,9 +920,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         return Err(format!("Minecraft version '{version}' was not found in Mojang's official version list. Refresh the version list and try again."));
     }
 
-    let account_json = credential_entry(MINECRAFT_ACCOUNT_USER)?
-        .get_password()
-        .map_err(|_| "Sign in with your Microsoft account before launching Minecraft.".to_string())?;
+    let account_json = read_saved_minecraft_account_json("Game launch")?;
     let saved_account: Account = serde_json::from_str(&account_json)
         .map_err(|e| format!("Saved Minecraft account is unreadable: {e}"))?;
     let account = refresh_saved_minecraft_account(&saved_account).await?;
@@ -339,7 +933,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
     std::fs::create_dir_all(&game_root)
         .map_err(|e| format!("Could not create the Minecraft game folder: {e}"))?;
 
-    let mut options = LaunchOptions::new(game_root, version.clone());
+    let mut options = LaunchOptions::new(game_root.clone(), version.clone());
     if let Some(name) = instance_name.as_deref() {
         options.instance = Some(safe_instance_name(name)?);
     }
@@ -356,51 +950,54 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         options.loader.build = loader_build;
         options.loader.enable = true;
     }
-    let memory_mb = memory_mb.unwrap_or(4096);
-    if !(1024..=16384).contains(&memory_mb) {
+    reset_logs_for_launch(&game_root, instance_name.as_deref())?;
+    let requested_memory_mb = memory_mb.unwrap_or(2048);
+    if !(1024..=16384).contains(&requested_memory_mb) {
         return Err("Memory allocation must be between 1024 MB and 16384 MB.".into());
     }
+    let memory_mb = safe_minecraft_memory_mb(requested_memory_mb);
+    options.memory.min = "512M".to_owned();
     options.memory.max = format!("{memory_mb}M");
-    options.download_concurrency = 8;
+    game_log(&format!("Minecraft heap: requested {requested_memory_mb} MB, using {memory_mb} MB after checking system RAM."));
+    options.download_concurrency = 6;
 
+    game_log(&format!("Starting Minecraft {version} ({loader}) in profile '{}'.", instance_name.as_deref().unwrap_or("default")));
+    let crash_root = game_root.clone();
+    let crash_instance = instance_name.clone();
     let launch = Launch::new(options, account)
-        .map_err(|e| format!("Could not prepare Minecraft: {e}"))?;
-    let launch_key = instance_name.as_deref()
-        .map(safe_instance_name).transpose()?
-        .unwrap_or_else(|| format!("default-{version}"));
-    let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
-    {
-        let mut running = active.lock().map_err(|_| "Could not inspect active Minecraft launches.")?;
-        if !running.insert(launch_key.clone()) {
-            return Err("This Minecraft instance is already running.".into());
-        }
-    }
-    clear_game_log(instance_name.as_deref())?;
-    let mut child = match launch.run().await {
-        Ok(child) => child,
-        Err(error) => {
-            if let Ok(mut running) = active.lock() { running.remove(&launch_key); }
-            return Err(format!("Minecraft could not be installed or started: {error}"));
-        }
-    };
+        .map_err(|e| format!("Could not prepare Minecraft: {e}"))?
+        .with_events(game_event_logger());
+    let mut child = launch.run().await
+        .map_err(|error| {
+            game_log(&format!("Minecraft failed to install or start: {error}"));
+            format!("Minecraft could not be installed or started: {error}")
+        })?;
+    let game_pid = child.id().ok_or("Minecraft started but its process ID could not be read.")?;
+    game_log(&format!("Minecraft process started successfully (pid {game_pid})."));
+    ACTIVE_GAME_PIDS.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+        .lock().map_err(|_| "Could not register the running Minecraft process.")?
+        .insert(launch_key.clone(), game_pid);
+    let process_key = launch_key.clone();
 
-    // Keep the process ID so the Stop button can terminate Minecraft and its child processes.
-    if let Some(pid) = child.id() {
-        let pids = ACTIVE_PROCESS_IDS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
-        if let Ok(mut running) = pids.lock() { running.insert(launch_key.clone(), pid); }
-    }
-    // Supervise the child and release the instance lock when the game exits.
+    // Keep the reservation alive until the game exits; dropping it releases the lock.
     tokio::spawn(async move {
+        let _reservation = reservation;
         let exit = child.wait().await;
-        if let Ok(mut running) = active.lock() { running.remove(&launch_key); }
-        if let Some(pids) = ACTIVE_PROCESS_IDS.get() {
-            if let Ok(mut running) = pids.lock() { running.remove(&launch_key); }
+        if let Some(pids) = ACTIVE_GAME_PIDS.get() {
+            if let Ok(mut pids) = pids.lock() { pids.remove(&process_key); }
         }
         let (success, code) = match exit {
             Ok(status) => (status.success(), status.code()),
-            Err(_) => (false, None),
+            Err(error) => {
+                game_log(&format!("Could not wait for Minecraft process: {error}"));
+                (false, None)
+            }
         };
-        let _ = app.emit("nova-game-exit", json!({"success":success,"code":code}));
+        game_log(&format!("Minecraft process exited: success={success}, exit_code={code:?}."));
+        if !success {
+            log_latest_crash_report(&crash_root, crash_instance.as_deref());
+        }
+        let _ = app.emit("nova-game-exit", json!({"instanceName":crash_instance,"success":success,"code":code}));
     });
     Ok(())
 }
@@ -408,19 +1005,25 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
 
 #[tauri::command]
 fn stop_minecraft(instance_name: String) -> Result<(), String> {
-    let name = safe_instance_name(&instance_name)?;
-    let pids = ACTIVE_PROCESS_IDS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
-    let pid = pids.lock()
-        .map_err(|_| "Could not inspect running Minecraft processes.")?
-        .get(&name).copied()
-        .ok_or_else(|| "This Minecraft instance is not currently running.".to_string())?;
-    let output = std::process::Command::new("taskkill")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .output()
-        .map_err(|e| format!("Could not stop Minecraft: {e}"))?;
-    if !output.status.success() {
-        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
-        return Err(if detail.is_empty() { "Windows could not stop the Minecraft process.".into() } else { detail });
+    let key = safe_instance_name(&instance_name)?;
+    let pid = ACTIVE_GAME_PIDS.get()
+        .and_then(|pids| pids.lock().ok().and_then(|pids| pids.get(&key).copied()))
+        .ok_or("This modpack does not have a running Minecraft process.")?;
+    game_log(&format!("Stop requested for Minecraft instance '{key}' (pid {pid})."));
+    #[cfg(windows)]
+    {
+        let output = std::process::Command::new("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output()
+            .map_err(|error| format!("Could not stop Minecraft: {error}"))?;
+        if !output.status.success() {
+            let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+            return Err(if detail.is_empty() { "Windows could not stop the Minecraft process.".into() } else { detail });
+        }
+    }
+    #[cfg(not(windows))]
+    {
+        return Err("Stopping Minecraft is currently supported on Windows only.".into());
     }
     Ok(())
 }
@@ -443,8 +1046,23 @@ fn safe_instance_name(input: &str) -> Result<String, String> {
 fn safe_relative_path(input: &str) -> Result<PathBuf, String> {
     let normalized = input.replace('\\', "/");
     let path = Path::new(&normalized);
-    if path.is_absolute() || path.components().any(|c| !matches!(c, Component::Normal(_) | Component::CurDir)) {
+    if path.is_absolute() || path.components().any(|component| !matches!(component, Component::Normal(_) | Component::CurDir)) {
         return Err(format!("The pack contains an unsafe file path: {input}"));
+    }
+    for component in path.components() {
+        let Component::Normal(part) = component else { continue };
+        let Some(part) = part.to_str() else {
+            return Err(format!("The pack contains a non-Unicode Windows file path: {input}"));
+        };
+        if part.chars().any(|c| c.is_control() || "<>:\"|?*".contains(c))
+            || part.ends_with('.') || part.ends_with(' ')
+        {
+            return Err(format!("The pack contains a Windows-invalid file path: {input}"));
+        }
+        let stem = part.split('.').next().unwrap_or("").trim_end_matches(|c| c == ' ' || c == '.').to_ascii_uppercase();
+        if matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "COM1" | "COM2" | "COM3" | "COM4" | "COM5" | "COM6" | "COM7" | "COM8" | "COM9" | "LPT1" | "LPT2" | "LPT3" | "LPT4" | "LPT5" | "LPT6" | "LPT7" | "LPT8" | "LPT9") {
+            return Err(format!("The pack contains a reserved Windows device filename: {input}"));
+        }
     }
     Ok(path.to_path_buf())
 }
@@ -455,8 +1073,10 @@ fn instance_folder(instance_name: &str) -> Result<PathBuf, String> {
     Ok(PathBuf::from(local).join("NOVA Client").join("minecraft").join("instances").join(safe_instance_name(instance_name)?))
 }
 
-fn extract_pack_overrides(bytes: &[u8], prefix: &str, destination: &Path) -> Result<(), String> {
-    let mut archive = ZipArchive::new(Cursor::new(bytes))
+fn extract_pack_overrides(archive_path: &Path, prefix: &str, destination: &Path) -> Result<(), String> {
+    let archive_file = std::fs::File::open(archive_path)
+        .map_err(|e| format!("Could not open downloaded modpack archive: {e}"))?;
+    let mut archive = ZipArchive::new(archive_file)
         .map_err(|e| format!("The modpack archive is invalid: {e}"))?;
     if archive.len() > MAX_ARCHIVE_ENTRIES {
         return Err("The modpack archive contains too many files and was blocked for safety.".into());
@@ -486,31 +1106,149 @@ fn extract_pack_overrides(bytes: &[u8], prefix: &str, destination: &Path) -> Res
                 std::fs::create_dir_all(parent)
                     .map_err(|e| format!("Could not create pack folder: {e}"))?;
             }
-            let mut file_bytes = Vec::new();
-            entry.read_to_end(&mut file_bytes)
-                .map_err(|e| format!("Could not extract pack override: {e}"))?;
-            atomic_write(&output, &file_bytes)
-                .map_err(|e| format!("Could not write pack override: {e}"))?;
+            let output_name = output.file_name().and_then(|n| n.to_str()).unwrap_or("override");
+            let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+            let temporary = output.with_file_name(format!(".{output_name}.{}.{sequence}.partial", std::process::id()));
+            let extraction_result = (|| -> Result<(), String> {
+                let mut file = std::fs::File::create(&temporary)
+                    .map_err(|e| format!("Could not create temporary pack override: {e}"))?;
+                std::io::copy(&mut entry, &mut file)
+                    .map_err(|e| format!("Could not extract pack override: {e}"))?;
+                file.flush().map_err(|e| format!("Could not flush pack override: {e}"))?;
+                replace_file(&temporary, &output)
+                    .map_err(|e| format!("Could not finalize pack override: {e}"))?;
+                Ok(())
+            })();
+            if extraction_result.is_err() { let _ = std::fs::remove_file(&temporary); }
+            extraction_result?;
         }
     }
     Ok(())
 }
 
-async fn fetch_bytes(url: &str) -> Result<Vec<u8>, String> {
+async fn download_pack_archive(app: &tauri::AppHandle, url: &str, destination: &Path) -> Result<(), String> {
+    download_pack_archive_with_curseforge_key(app, url, destination, None).await
+}
+
+async fn download_pack_archive_with_curseforge_key(
+    app: &tauri::AppHandle,
+    url: &str,
+    destination: &Path,
+    api_key: Option<&str>,
+) -> Result<(), String> {
     if !url.starts_with("https://") {
         return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());
     }
-    let response = http_client()?.get(url).send().await
-        .map_err(|e| format!("Download failed: {e}"))?
-        .error_for_status().map_err(|e| format!("Download server returned an error: {e}"))?;
-    if response.content_length().is_some_and(|size| size > MAX_ARCHIVE_TOTAL_BYTES) {
+    let client = if api_key.is_some() { curseforge_download_client()? } else { download_client()? };
+    let mut request = client.get(url);
+    if let Some(key) = api_key.filter(|_| is_curseforge_cdn_url(url)) {
+        request = request.header("x-api-key", key);
+    }
+    let response = request.send().await
+        .map_err(|e| format!("Archive download failed: {e}"))?;
+    if !response.status().is_success() {
+        let status = response.status();
+        if status.is_redirection() && api_key.is_some() {
+            return Err("CurseForge redirected the archive to an untrusted download host. NOVA stopped the download rather than risk sending credentials or saving a redirect page as a ZIP.".into());
+        }
+        return Err(format!("Archive server returned HTTP {status}; no archive was saved."));
+    }
+    if response.url().scheme() != "https" {
+        return Err("The archive download redirected to an insecure connection; it was blocked.".into());
+    }
+    if response.headers().get(reqwest::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.to_ascii_lowercase().contains("text/html")) {
+        return Err("The archive server returned a web page instead of a ZIP file. CurseForge may have blocked or redirected this download; try another pack version.".into());
+    }
+    let total = response.content_length();
+    if total.is_some_and(|size| size > MAX_ARCHIVE_TOTAL_BYTES) {
         return Err("The downloaded archive exceeds NOVA's 2 GiB safety limit.".into());
     }
-    let bytes = response.bytes().await.map_err(|e| format!("Could not read downloaded file: {e}"))?;
-    if bytes.len() as u64 > MAX_ARCHIVE_TOTAL_BYTES {
-        return Err("The downloaded archive exceeds NOVA's 2 GiB safety limit.".into());
+    let parent = destination.parent().ok_or("Archive destination has no parent folder.")?;
+    tokio::fs::create_dir_all(parent).await
+        .map_err(|e| format!("Could not create modpack folder: {e}"))?;
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".nova-pack-{}-{sequence}.partial", std::process::id()));
+    let result: Result<(), String> = async {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(&temporary).await
+            .map_err(|e| format!("Could not create temporary archive: {e}"))?;
+        let mut response = response;
+        let mut downloaded = 0u64;
+        let mut last_reported = 0u64;
+        while let Some(chunk) = response.chunk().await
+            .map_err(|e| format!("Could not read modpack archive: {e}"))? {
+            downloaded = downloaded.checked_add(chunk.len() as u64)
+                .ok_or("Archive download size overflowed.")?;
+            if downloaded > MAX_ARCHIVE_TOTAL_BYTES {
+                return Err("The downloaded archive exceeds NOVA's 2 GiB safety limit.".into());
+            }
+            file.write_all(&chunk).await
+                .map_err(|e| format!("Could not write temporary archive: {e}"))?;
+            if downloaded.saturating_sub(last_reported) >= 1024 * 1024 {
+                let detail = if let Some(size) = total {
+                    format!("Downloading modpack archive: {:.1} / {:.1} MB", downloaded as f64 / 1_048_576.0, size as f64 / 1_048_576.0)
+                } else {
+                    format!("Downloading modpack archive: {:.1} MB", downloaded as f64 / 1_048_576.0)
+                };
+                let percent = total.map(|size| ((downloaded as f64 / size.max(1) as f64) * 15.0).round() as u32);
+                let _ = app.emit("nova-pack-progress", json!({"phase":"archive","completed":downloaded,"total":total.unwrap_or(0),"percent":percent,"detail":detail}));
+                last_reported = downloaded;
+            }
+        }
+        if let Some(size) = total {
+            if downloaded != size {
+                return Err(format!("The archive download was incomplete (expected {size} bytes, received {downloaded})."));
+            }
+        }
+        file.flush().await.map_err(|e| format!("Could not flush downloaded archive: {e}"))?;
+        drop(file);
+        // Validate the ZIP central directory before promoting the temporary file.
+        // This catches HTML/error bodies and truncated CDN responses at download
+        // time, instead of leaving a corrupt archive for the installer to extract.
+        let zip_check = std::fs::File::open(&temporary)
+            .map_err(|e| format!("Could not verify downloaded archive: {e}"))
+            .and_then(|archive| ZipArchive::new(archive).map(|_| ())
+                .map_err(|e| format!("The download did not contain a complete valid ZIP archive: {e}")));
+        if let Err(error) = zip_check {
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(error);
+        }
+        replace_file(&temporary, destination)
+            .map_err(|e| format!("Could not finalize downloaded archive: {e}"))?;
+        Ok(())
+    }.await;
+    if result.is_err() { let _ = tokio::fs::remove_file(&temporary).await; }
+    result
+}
+
+// Windows std::fs::rename does not replace an existing destination. Move the
+// previous file aside first, install the completed temporary file, and restore
+// the previous file if the final move fails.
+fn replace_file(source: &Path, destination: &Path) -> Result<(), std::io::Error> {
+    let parent = destination.parent().ok_or_else(|| std::io::Error::new(
+        std::io::ErrorKind::InvalidInput, "destination has no parent folder"
+    ))?;
+    if !destination.exists() {
+        return std::fs::rename(source, destination);
     }
-    Ok(bytes.to_vec())
+    let file_name = destination.file_name().and_then(|n| n.to_str()).unwrap_or("download");
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let backup = parent.join(format!(".{file_name}.{}.{sequence}.backup", std::process::id()));
+    std::fs::rename(destination, &backup)?;
+    match std::fs::rename(source, destination) {
+        Ok(()) => {
+            let _ = std::fs::remove_file(backup);
+            Ok(())
+        }
+        Err(error) => {
+            // Keep the original failure as the returned error. If restoration also
+            // fails, the backup remains beside the destination for manual recovery.
+            let _ = std::fs::rename(&backup, destination);
+            Err(error)
+        }
+    }
 }
 
 fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
@@ -520,28 +1258,122 @@ fn atomic_write(destination: &Path, bytes: &[u8]) -> Result<(), String> {
     let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
     let temporary = parent.join(format!(".{file_name}.{}.{sequence}.partial", std::process::id()));
     std::fs::write(&temporary, bytes).map_err(|e| format!("Could not write temporary download: {e}"))?;
-    if let Err(error) = std::fs::rename(&temporary, destination) {
+    if let Err(error) = replace_file(&temporary, destination) {
         let _ = std::fs::remove_file(&temporary);
         return Err(format!("Could not finalize downloaded file: {error}"));
     }
     Ok(())
 }
 
-async fn download_pack_file(url: &str, destination: &Path, expected_size: Option<u64>, expected_sha1: Option<&str>) -> Result<(), String> {
-    let bytes = fetch_bytes(url).await?;
-    if let Some(size) = expected_size {
-        if bytes.len() as u64 != size {
-            return Err(format!("A mod file had an unexpected size (expected {size}, received {}).", bytes.len()));
-        }
+async fn download_pack_file(app: &tauri::AppHandle, url: &str, destination: &Path, expected_size: Option<u64>, expected_sha1: Option<&str>) -> Result<(), String> {
+    download_pack_file_with_curseforge_key(app, url, destination, expected_size, expected_sha1, None).await
+}
+
+async fn download_pack_file_with_curseforge_key(
+    app: &tauri::AppHandle,
+    url: &str,
+    destination: &Path,
+    expected_size: Option<u64>,
+    expected_sha1: Option<&str>,
+    api_key: Option<&str>,
+) -> Result<(), String> {
+    if !url.starts_with("https://") {
+        return Err("The pack supplied a non-HTTPS download URL; it was blocked.".into());
     }
-    if let Some(expected) = expected_sha1.filter(|s| !s.is_empty()) {
-        let digest = Sha1::digest(&bytes);
-        let actual = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
-        if !actual.eq_ignore_ascii_case(expected) {
-            return Err("A mod file failed its SHA-1 integrity check.".into());
-        }
+    if expected_size.is_some_and(|size| size > MAX_ARCHIVE_FILE_BYTES) {
+        return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
     }
-    atomic_write(destination, &bytes).map_err(|e| format!("Could not save a downloaded mod: {e}"))
+    let client = if api_key.is_some() { curseforge_download_client()? } else { download_client()? };
+    let mut request = client.get(url);
+    if let Some(key) = api_key.filter(|_| is_curseforge_cdn_url(url)) {
+        request = request.header("x-api-key", key);
+    }
+    let response = request.send().await
+        .map_err(|e| format!("Mod download failed: {e}"))?
+        .error_for_status().map_err(|e| format!("Mod download server returned an error: {e}"))?;
+    if response.url().scheme() != "https" {
+        return Err("The mod download redirected to an insecure connection; it was blocked.".into());
+    }
+    let expected_total = response.content_length().or(expected_size);
+    if response.content_length().is_some_and(|size| size > MAX_ARCHIVE_FILE_BYTES) {
+        return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
+    }
+    let parent = destination.parent().ok_or("Download destination has no parent folder.")?;
+    tokio::fs::create_dir_all(parent).await
+        .map_err(|e| format!("Could not create download folder: {e}"))?;
+    let file_name = destination.file_name().and_then(|n| n.to_str()).unwrap_or("download");
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let temporary = parent.join(format!(".{file_name}.{}.{sequence}.partial", std::process::id()));
+    let result: Result<(), String> = async {
+        use tokio::io::AsyncWriteExt;
+        let mut file = tokio::fs::File::create(&temporary).await
+            .map_err(|e| format!("Could not create temporary mod download: {e}"))?;
+        let mut response = response;
+        let mut hasher = Sha1::new();
+        let mut downloaded = 0u64;
+        let mut last_progress = 0u64;
+        while let Some(chunk) = response.chunk().await
+            .map_err(|e| format!("Could not read mod download: {e}"))? {
+            downloaded = downloaded.checked_add(chunk.len() as u64)
+                .ok_or("Mod download size overflowed.")?;
+            if downloaded > MAX_ARCHIVE_FILE_BYTES {
+                return Err("A mod file exceeds NOVA's 512 MiB per-file safety limit.".into());
+            }
+            if expected_size.is_some_and(|size| downloaded > size) {
+                return Err("A mod file exceeded the size declared by its manifest.".into());
+            }
+            hasher.update(&chunk);
+            file.write_all(&chunk).await
+                .map_err(|e| format!("Could not write temporary mod download: {e}"))?;
+            if downloaded.saturating_sub(last_progress) >= 1024 * 1024 {
+                let detail = if let Some(total) = expected_total {
+                    format!("Downloading mod file: {:.1} / {:.1} MB", downloaded as f64 / 1_048_576.0, total as f64 / 1_048_576.0)
+                } else {
+                    format!("Downloading mod file: {:.1} MB", downloaded as f64 / 1_048_576.0)
+                };
+                emit_pack_progress(app, "files", 0, 0, &detail);
+                last_progress = downloaded;
+            }
+        }
+        if let Some(total) = expected_total {
+            if downloaded != total {
+                return Err(format!("A mod download was incomplete (expected {total} bytes, received {downloaded})."));
+            }
+        }
+        file.flush().await.map_err(|e| format!("Could not flush mod download: {e}"))?;
+        drop(file);
+        if let Some(size) = expected_size {
+            if downloaded != size {
+                return Err(format!("A mod file had an unexpected size (expected {size}, received {downloaded})."));
+            }
+        }
+        if let Some(expected) = expected_sha1.filter(|s| !s.is_empty()) {
+            let digest = hasher.finalize();
+            let actual = digest.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            if !actual.eq_ignore_ascii_case(expected) {
+                return Err("A mod file failed its SHA-1 integrity check.".into());
+            }
+        }
+        replace_file(&temporary, destination)
+            .map_err(|e| format!("Could not finalize downloaded mod: {e}"))?;
+        Ok(())
+    }.await;
+    if result.is_err() {
+        let _ = tokio::fs::remove_file(&temporary).await;
+    }
+    result
+}
+
+fn curseforge_loader_matches(mod_loader_type: u64, loader: &str) -> bool {
+    let expected = match loader.to_ascii_lowercase().as_str() {
+        "forge" => 1,
+        "fabric" => 4,
+        "quilt" => 5,
+        "neoforge" => 6,
+        // CurseForge uses 0 for an unspecified/any loader.
+        _ => return false,
+    };
+    mod_loader_type == 0 || mod_loader_type == expected
 }
 
 fn loader_from_id(id: &str) -> Result<(String, String), String> {
@@ -569,8 +1401,188 @@ fn save_instance_metadata(folder: &Path, metadata: Value) -> Result<Value, Strin
 }
 
 #[tauri::command]
+async fn install_mod_to_instance(
+    app: tauri::AppHandle,
+    provider: String,
+    project_id: String,
+    version_id: String,
+    instance_name: String,
+) -> Result<Value, String> {
+    let name = safe_instance_name(&instance_name)?;
+    let _reservation = InstanceReservation::acquire(name.clone())?;
+    install_mod_to_instance_inner(app, provider, project_id, version_id, name).await
+}
+
+async fn install_mod_to_instance_inner(
+    app: tauri::AppHandle,
+    provider: String,
+    project_id: String,
+    version_id: String,
+    name: String,
+) -> Result<Value, String> {
+    if project_id.is_empty() || !project_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("The selected mod project ID is invalid.".into());
+    }
+    if version_id.is_empty() || !version_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("The selected mod version ID is invalid.".into());
+    }
+    let folder = instance_folder(&name)?;
+    let metadata_path = folder.join("nova-instance.json");
+    let metadata_bytes = std::fs::read(&metadata_path)
+        .map_err(|_| "Choose an existing NOVA instance before installing a mod.".to_string())?;
+    let metadata: Value = serde_json::from_slice(&metadata_bytes)
+        .map_err(|_| "The selected instance metadata is damaged. Recreate the instance before installing mods.".to_string())?;
+    let minecraft_version = metadata["minecraftVersion"].as_str()
+        .ok_or("The selected instance has no Minecraft version.")?.to_owned();
+    let loader = metadata["loader"].as_str().unwrap_or("vanilla").to_owned();
+    if loader == "vanilla" {
+        return Err("This instance uses Vanilla. Create or choose a Fabric, Forge, NeoForge, or Quilt instance to install mods.".into());
+    }
+    let client = http_client()?;
+    let (download_url, filename, expected_size, expected_sha1, mod_title) = match provider.as_str() {
+        "modrinth" => {
+            let response: Value = client.get(format!("https://api.modrinth.com/v2/version/{version_id}"))
+                .send().await.map_err(|e| format!("Could not reach Modrinth: {e}"))?
+                .error_for_status().map_err(|e| format!("Modrinth could not find that mod version: {e}"))?
+                .json().await.map_err(|e| format!("Modrinth returned an unreadable mod version: {e}"))?;
+            if response["project_id"].as_str() != Some(project_id.as_str()) {
+                return Err("The selected Modrinth version does not belong to this project.".into());
+            }
+            let supported_versions = response["game_versions"].as_array().ok_or("Modrinth did not list compatible Minecraft versions.")?;
+            if !supported_versions.iter().any(|v| v.as_str() == Some(minecraft_version.as_str())) {
+                return Err(format!("This mod version does not support Minecraft {minecraft_version}."));
+            }
+            let loaders = response["loaders"].as_array().ok_or("Modrinth did not list compatible mod loaders.")?;
+            if !loaders.iter().any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(&loader))) {
+                return Err(format!("This mod version does not support the {} loader.", loader));
+            }
+            let file = response["files"].as_array()
+                .and_then(|files| files.iter().find(|f| f["primary"].as_bool() == Some(true)).or_else(|| files.first()))
+                .ok_or("Modrinth did not provide a downloadable mod file.")?;
+            (
+                file["url"].as_str().ok_or("Modrinth download URL is missing.")?.to_owned(),
+                file["filename"].as_str().ok_or("Modrinth file name is missing.")?.to_owned(),
+                file["size"].as_u64(),
+                file["hashes"]["sha1"].as_str().map(str::to_owned),
+                response["name"].as_str().unwrap_or("Mod").to_owned(),
+            )
+        },
+        "curseforge" => {
+            let mod_id: u64 = project_id.parse().map_err(|_| "The CurseForge project ID is invalid.")?;
+            let file_id: u64 = version_id.parse().map_err(|_| "The CurseForge file ID is invalid.")?;
+            let api_key = curseforge_api_key()?;
+            let mut headers = HeaderMap::new();
+            headers.insert("x-api-key", HeaderValue::from_str(&api_key).map_err(|_| "The saved CurseForge API key is invalid.")?);
+            headers.insert(ACCEPT, HeaderValue::from_static("application/json"));
+            let response: Value = client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}"))
+                .headers(headers.clone()).send().await.map_err(|e| format!("Could not reach CurseForge: {e}"))?
+                .error_for_status().map_err(|e| format!("CurseForge could not find that mod file: {e}"))?
+                .json().await.map_err(|e| format!("CurseForge returned an unreadable mod file: {e}"))?;
+            let file = &response["data"];
+            if file["modId"].as_u64() != Some(mod_id) {
+                return Err("The selected CurseForge file does not belong to this project.".into());
+            }
+            let versions = file["gameVersions"].as_array().ok_or("CurseForge did not list compatible game versions.")?;
+            if !versions.iter().any(|v| v.as_str() == Some(minecraft_version.as_str())) {
+                return Err(format!("This mod file does not list Minecraft {minecraft_version} as compatible."));
+            }
+            let mod_loader_type = file["modLoaderType"].as_u64().unwrap_or(0);
+            if !curseforge_loader_matches(mod_loader_type, &loader) {
+                return Err(format!("This CurseForge file does not support the {} loader.", loader));
+            }
+            let curseforge_sha1 = file["hashes"].as_array()
+                .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
+                .and_then(|hash| hash["value"].as_str())
+                .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+                .map(str::to_owned)
+                .ok_or("CurseForge did not provide a valid SHA-1 checksum for this mod file; installation was stopped.")?;
+            let expected_file_size = file["fileLength"].as_u64()
+                .ok_or("CurseForge did not provide the expected mod file size; installation was stopped.")?;
+            let url = if let Some(url) = file["downloadUrl"].as_str() {
+                url.to_owned()
+            } else {
+                client.get(format!("{CURSEFORGE_API}/mods/{mod_id}/files/{file_id}/download-url"))
+                    .headers(headers).send().await.map_err(|e| format!("Could not request the CurseForge download: {e}"))?
+                    .error_for_status().map_err(|e| format!("CurseForge did not provide a download URL: {e}"))?
+                    .json::<Value>().await.map_err(|e| format!("CurseForge download response was unreadable: {e}"))?["data"]
+                    .as_str().ok_or("CurseForge did not provide a download URL for this mod.")?.to_owned()
+            };
+            (
+                url,
+                file["fileName"].as_str().ok_or("CurseForge file name is missing.")?.to_owned(),
+                Some(expected_file_size),
+                Some(curseforge_sha1),
+                file["displayName"].as_str().unwrap_or("Mod").to_owned(),
+            )
+        },
+        _ => return Err("Choose Modrinth or CurseForge as the mod source.".into()),
+    };
+    if !download_url.starts_with("https://") {
+        return Err("The mod source supplied a non-HTTPS download URL; it was blocked.".into());
+    }
+    let expected_size = expected_size
+        .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+        .ok_or("The mod source did not provide a valid file size; installation was stopped.")?;
+    let expected_sha1 = expected_sha1
+        .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+        .ok_or("The mod source did not provide a valid SHA-1 checksum; installation was stopped.")?;
+    let safe_path = safe_relative_path(&filename)?;
+    if safe_path.components().count() != 1 {
+        return Err("The selected mod filename contains an invalid path.".into());
+    }
+    let safe_filename = Path::new(&filename).file_name().and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty() && s.to_ascii_lowercase().ends_with(".jar"))
+        .ok_or("The selected mod file is not a valid JAR filename.")?;
+    let mods_folder = folder.join("mods");
+    std::fs::create_dir_all(&mods_folder).map_err(|e| format!("Could not create instance mods folder: {e}"))?;
+    let destination = mods_folder.join(safe_filename);
+    if destination.exists() {
+        return Err(format!("A mod named '{safe_filename}' is already installed in this instance."));
+    }
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let staging = mods_folder.join(format!(".{safe_filename}.{}.{}.installing", std::process::id(), sequence));
+    emit_pack_progress(&app, "files", 0, 0, "Downloading selected mod");
+    download_pack_file(&app, &download_url, &staging, Some(expected_size), Some(&expected_sha1)).await?;
+    let jar_check = std::fs::File::open(&staging)
+        .map_err(|e| format!("Could not verify downloaded mod archive: {e}"))
+        .and_then(|file| ZipArchive::new(file).map(|_| ()).map_err(|e| format!("The downloaded file is not a valid JAR archive: {e}")));
+    if let Err(error) = jar_check {
+        let _ = std::fs::remove_file(&staging);
+        return Err(error);
+    }
+    // The outer command reserves this instance for the whole download, preventing
+    // launch or deletion until the validated JAR has been committed.
+    if destination.exists() {
+        let _ = std::fs::remove_file(&staging);
+        return Err(format!("A mod named '{safe_filename}' is already installed in this instance."));
+    }
+    std::fs::rename(&staging, &destination).map_err(|e| {
+        let _ = std::fs::remove_file(&staging);
+        format!("Could not install downloaded mod: {e}")
+    })?;
+    Ok(json!({"name":mod_title,"fileName":safe_filename,"instanceName":name,"minecraftVersion":minecraft_version,"loader":loader}))
+}
+
+
+fn modrinth_minecraft_version(index: &Value, version: &Value) -> Result<String, String> {
+    index["dependencies"]["minecraft"]["version"].as_str()
+        .filter(|value| !value.trim().is_empty())
+        .or_else(|| version["game_versions"].as_array()
+            .and_then(|versions| versions.iter().filter_map(Value::as_str).find(|value| !value.trim().is_empty())))
+        .map(str::to_owned)
+        .ok_or_else(|| "This Modrinth pack does not declare a Minecraft version, and Modrinth's version metadata does not provide one either.".to_string())
+}
+
+#[tauri::command]
 async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, instance_name: String, version_id: Option<String>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _reservation = InstanceReservation::acquire(name.clone())?;
+    if project_id.is_empty() || !project_id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+        return Err("The selected Modrinth modpack project ID is invalid.".into());
+    }
+    if version_id.as_deref().is_some_and(|id| id.is_empty() || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')) {
+        return Err("The selected Modrinth modpack version ID is invalid.".into());
+    }
     let client = http_client()?;
     let versions: Value = client.get(format!("https://api.modrinth.com/v2/project/{project_id}/version"))
         .send().await.map_err(|e| format!("Could not reach Modrinth: {e}"))?
@@ -582,55 +1594,111 @@ async fn install_modrinth_modpack(app: tauri::AppHandle, project_id: String, ins
     let file = latest["files"].as_array().and_then(|a| a.iter().find(|f| f["primary"].as_bool() == Some(true)).or_else(|| a.first()))
         .ok_or("Modrinth did not provide a modpack archive.")?;
     let download_url = file["url"].as_str().ok_or("Modrinth download URL is missing.")?;
+    let folder = instance_folder(&name)?;
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    let archive_path = folder.join(".nova-modrinth-pack.zip");
     emit_pack_progress(&app, "archive", 0, 0, "Downloading Modrinth archive");
-    let archive_bytes = fetch_bytes(download_url).await?;
-    let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
+    download_pack_archive(&app, download_url, &archive_path).await?;
+    let mut archive = ZipArchive::new(std::fs::File::open(&archive_path)
+        .map_err(|e| format!("Could not open downloaded Modrinth archive: {e}"))?)
         .map_err(|e| format!("The Modrinth pack is not a valid ZIP archive: {e}"))?;
     let mut index_bytes = Vec::new();
-    archive.by_name("modrinth.index.json")
-        .map_err(|_| "This Modrinth archive is missing modrinth.index.json.".to_string())?
-        .read_to_end(&mut index_bytes).map_err(|e| format!("Could not read Modrinth manifest: {e}"))?;
+    let mut index_entry = archive.by_name("modrinth.index.json")
+        .map_err(|_| "This Modrinth archive is missing modrinth.index.json.".to_string())?;
+    if index_entry.size() > MAX_PACK_MANIFEST_BYTES {
+        return Err("The Modrinth manifest exceeds NOVA's 16 MiB safety limit.".into());
+    }
+    index_entry.read_to_end(&mut index_bytes)
+        .map_err(|e| format!("Could not read Modrinth manifest: {e}"))?;
+    drop(index_entry);
     let index: Value = serde_json::from_slice(&index_bytes)
         .map_err(|e| format!("Modrinth manifest is invalid: {e}"))?;
+    drop(archive);
     if index["formatVersion"].as_u64() != Some(1) {
         return Err("This Modrinth modpack format is not supported.".into());
     }
-    let mc_version = index["dependencies"]["minecraft"]["version"].as_str()
-        .ok_or("Modrinth pack does not specify a Minecraft version.")?.to_owned();
+    // Some exported Modrinth packs omit dependencies.minecraft. In that case,
+    // use the selected Modrinth version's game_versions metadata as the source
+    // of truth instead of rejecting an otherwise valid pack.
+    let mc_version = modrinth_minecraft_version(&index, latest)?;
     let loader_entry = ["fabric-loader", "forge", "neoforge", "quilt-loader", "legacy-fabric"]
         .iter().find_map(|key| index["dependencies"][*key].as_str().map(|v| (*key, v)));
     let (loader, loader_build) = if let Some((key, build)) = loader_entry {
         (match key { "fabric-loader"=>"fabric", "quilt-loader"=>"quilt", "legacy-fabric"=>"legacyfabric", other=>other }.to_owned(), build.to_owned())
     } else { ("vanilla".to_owned(), String::new()) };
-    let folder = instance_folder(&name)?;
-    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
     let pack_files = index["files"].as_array().ok_or("Modrinth manifest has no files list.")?;
-    let total_files = pack_files.iter().filter(|item| item["env"]["client"].as_str() != Some("unsupported")).count() as u64;
-    let mut completed_files = 0u64;
-    emit_pack_progress(&app, "files", 0, total_files, "Downloading Modrinth files");
+    if pack_files.len() > MAX_ARCHIVE_ENTRIES {
+        return Err("The Modrinth manifest contains too many files and was blocked for safety.".into());
+    }
+    let declared_download_bytes = pack_files.iter()
+        .filter(|item| item["env"]["client"].as_str() != Some("unsupported"))
+        .try_fold(0u64, |total, item| {
+            let size = item["fileSize"].as_u64()
+                .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+                .ok_or_else(|| "A Modrinth file has missing or invalid size metadata.".to_string())?;
+            total.checked_add(size).ok_or_else(|| "Modrinth pack download size overflowed.".to_string())
+        })?;
+    if declared_download_bytes > MAX_ARCHIVE_TOTAL_BYTES {
+        return Err("The Modrinth pack's required downloads exceed NOVA's 2 GiB safety limit.".into());
+    }
+    // Validate every manifest entry first, then download with a small bounded worker
+    // pool. The old serial loop waited for each CDN request to finish before starting
+    // the next file, leaving the connection idle between hundreds of small downloads.
+    let mut download_jobs: Vec<(usize, Vec<String>, PathBuf, u64, String)> = Vec::new();
     for (i, item) in pack_files.iter().enumerate() {
         if item["env"]["client"].as_str() == Some("unsupported") { continue; }
         let relative = safe_relative_path(item["path"].as_str().ok_or("A Modrinth file path is missing.")?)?;
-        let urls = item["downloads"].as_array().ok_or("A Modrinth file has no download URLs.")?;
+        let urls = item["downloads"].as_array().ok_or("A Modrinth file has no download URLs.")?
+            .iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>();
         if urls.is_empty() { return Err("A Modrinth file has no download URLs.".into()); }
-        let size = item["fileSize"].as_u64();
-        let sha1 = item["hashes"]["sha1"].as_str();
-        let mut last_error = None;
-        let mut downloaded = false;
-        for candidate in urls.iter().filter_map(Value::as_str) {
-            match download_pack_file(candidate, &folder.join(relative.clone()), size, sha1).await {
-                Ok(()) => { downloaded = true; break; }
-                Err(error) => last_error = Some(error),
-            }
-        }
-        if !downloaded {
-            return Err(format!("Mod file {} of {} failed from all available mirrors: {}", i + 1, pack_files.len(), last_error.unwrap_or_else(|| "No usable HTTPS download URL.".into())));
-        }
-        completed_files += 1;
-        emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
+        let size = item["fileSize"].as_u64()
+            .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+            .ok_or_else(|| format!("Modrinth file {} has missing or invalid size metadata.", i + 1))?;
+        let sha1 = item["hashes"]["sha1"].as_str()
+            .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+            .ok_or_else(|| format!("Modrinth file {} has missing or invalid SHA-1 metadata.", i + 1))?
+            .to_owned();
+        download_jobs.push((i + 1, urls, folder.join(relative), size, sha1));
     }
-    extract_pack_overrides(&archive_bytes, "overrides/", &folder)?;
-    extract_pack_overrides(&archive_bytes, "client-overrides/", &folder)?;
+    let total_files = download_jobs.len() as u64;
+    let mut completed_files = 0u64;
+    emit_pack_progress(&app, "files", 0, total_files, "Downloading Modrinth files");
+    const MAX_PARALLEL_MODRINTH_DOWNLOADS: usize = 4;
+    let mut pending_jobs = download_jobs.into_iter();
+    let mut workers = tokio::task::JoinSet::new();
+    let spawn_download = |workers: &mut tokio::task::JoinSet<Result<usize, String>>,
+                          job: (usize, Vec<String>, PathBuf, u64, String),
+                          app: tauri::AppHandle| {
+        workers.spawn(async move {
+            let (number, urls, destination, size, sha1) = job;
+            let mut last_error = None;
+            for candidate in urls {
+                match download_pack_file(&app, &candidate, &destination, Some(size), Some(&sha1)).await {
+                    Ok(()) => return Ok(number),
+                    Err(error) => last_error = Some(error),
+                }
+            }
+            Err(format!("Mod file {number} failed from all available mirrors: {}",
+                last_error.unwrap_or_else(|| "No usable HTTPS download URL.".into())))
+        });
+    };
+    for _ in 0..MAX_PARALLEL_MODRINTH_DOWNLOADS {
+        if let Some(job) = pending_jobs.next() {
+            spawn_download(&mut workers, job, app.clone());
+        }
+    }
+    while let Some(result) = workers.join_next().await {
+        let number = result.map_err(|e| format!("Modrinth download worker failed: {e}"))??;
+        completed_files += 1;
+        emit_pack_progress(&app, "files", completed_files, total_files,
+            &format!("Downloaded file {completed_files} of {total_files} (latest: {number})"));
+        if let Some(job) = pending_jobs.next() {
+            spawn_download(&mut workers, job, app.clone());
+        }
+    }
+    extract_pack_overrides(&archive_path, "overrides/", &folder)?;
+    extract_pack_overrides(&archive_path, "client-overrides/", &folder)?;
+    let _ = std::fs::remove_file(&archive_path);
     let title = index["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(&name).to_owned();
     save_instance_metadata(&folder, json!({
         "instanceName":name,"name":title,"minecraftVersion":mc_version,"loader":loader,
@@ -665,8 +1733,99 @@ async fn curseforge_modpack_versions(mod_id: String) -> Result<Value, String> {
 }
 
 #[tauri::command]
+// Only use cross-platform mirrors that are explicitly mapped and verified against
+// CurseForge's own file metadata. Never guess a Modrinth project from a display name.
+async fn resolve_verified_modrinth_fallback(
+    client: &reqwest::Client,
+    curseforge_project: u64,
+    filename: &str,
+    minecraft_version: &str,
+    loader: &str,
+    expected_sha1: &str,
+) -> Result<Option<String>, String> {
+    let modrinth_project = match curseforge_project {
+        448233 => "entityculling",
+        _ => return Ok(None),
+    };
+    if !loader.eq_ignore_ascii_case("fabric") {
+        return Ok(None);
+    }
+    let response = match client
+        .get(format!("https://api.modrinth.com/v2/project/{modrinth_project}/version"))
+        .header(reqwest::header::USER_AGENT, "NOVA-Client/0.1.1 (modpack downloader)")
+        .send().await
+    {
+        Ok(response) if response.status().is_success() => response,
+        _ => return Ok(None),
+    };
+    let versions: Value = match response.json().await {
+        Ok(value) => value,
+        Err(_) => return Ok(None),
+    };
+    let Some(versions) = versions.as_array() else { return Ok(None); };
+    for version in versions {
+        let game_matches = version["game_versions"].as_array()
+            .is_some_and(|values| values.iter().any(|v| v.as_str() == Some(minecraft_version)));
+        let loader_matches = version["loaders"].as_array()
+            .is_some_and(|values| values.iter().any(|v| v.as_str().is_some_and(|s| s.eq_ignore_ascii_case(loader))));
+        if !game_matches || !loader_matches { continue; }
+        let Some(files) = version["files"].as_array() else { continue; };
+        for file in files {
+            if file["filename"].as_str() != Some(filename) { continue; }
+            let checksum_matches = file["hashes"]["sha1"].as_str()
+                .is_some_and(|hash| hash.eq_ignore_ascii_case(expected_sha1));
+            if !checksum_matches { continue; }
+            let Some(url) = file["url"].as_str() else { continue; };
+            let parsed = match reqwest::Url::parse(url) {
+                Ok(parsed) => parsed,
+                Err(_) => continue,
+            };
+            if parsed.scheme() != "https" || parsed.host_str() != Some("cdn.modrinth.com") {
+                continue;
+            }
+            return Ok(Some(url.to_owned()));
+        }
+    }
+    Ok(None)
+}
+
+
+async fn download_one_curseforge_mod(
+    app: tauri::AppHandle,
+    folder: PathBuf,
+    entry: (usize, u64, u64, String, u64, String, String, Option<String>),
+) -> Result<String, String> {
+    let (number, project, file, filename, expected_size, expected_sha1, url, download_key) = entry;
+    let mods_folder = folder.join("mods");
+    let destination = mods_folder.join(&filename);
+    let sequence = TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed);
+    let staging = mods_folder.join(format!(".{filename}.{}.{sequence}.partial", std::process::id()));
+    // A Modrinth CDN URL must use the unauthenticated public-download client;
+    // only approved CurseForge CDN hosts receive the CurseForge API key.
+    download_pack_file_with_curseforge_key(
+        &app, &url, &staging, Some(expected_size), Some(&expected_sha1), download_key.as_deref()
+    ).await.map_err(|e| format!("Could not save verified mod {number} ({project}/{file}): {e}"))?;
+    let jar_check = std::fs::File::open(&staging)
+        .map_err(|e| format!("Could not verify CurseForge mod {number}: {e}"))
+        .and_then(|file| ZipArchive::new(file).map(|_| ()).map_err(|e| format!("CurseForge mod {number} is not a valid JAR archive: {e}")));
+    if let Err(error) = jar_check {
+        let _ = std::fs::remove_file(&staging);
+        return Err(error);
+    }
+    replace_file(&staging, &destination).map_err(|e| {
+        let _ = std::fs::remove_file(&staging);
+        format!("Could not finalize CurseForge mod {number}: {e}")
+    })?;
+    Ok(filename)
+}
+
+#[tauri::command]
 async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, instance_name: String, file_id: Option<u64>) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _reservation = InstanceReservation::acquire(name.clone())?;
+    if mod_id.parse::<u64>().ok().filter(|id| *id > 0).is_none() {
+        return Err("The selected CurseForge modpack project ID is invalid.".into());
+    }
     let api_key = curseforge_api_key()?;
     let client = http_client()?;
     let mut headers = HeaderMap::new();
@@ -707,15 +1866,26 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         .error_for_status().map_err(|e| format!("CurseForge did not provide a download URL: {e}"))?
         .json::<Value>().await.map_err(|e| format!("CurseForge download response was unreadable: {e}"))?["data"]
         .as_str().ok_or("CurseForge did not provide a downloadable archive URL for this file.")?.to_owned();
+    let folder = instance_folder(&name)?;
+    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
+    let archive_path = folder.join(".nova-curseforge-pack.zip");
     emit_pack_progress(&app, "archive", 0, 0, "Downloading CurseForge archive");
-    let archive_bytes = fetch_bytes(&manifest_url).await?;
-    let mut archive = ZipArchive::new(Cursor::new(archive_bytes.clone()))
+    download_pack_archive_with_curseforge_key(&app, &manifest_url, &archive_path, Some(&api_key)).await?;
+    let mut archive = ZipArchive::new(std::fs::File::open(&archive_path)
+        .map_err(|e| format!("Could not open downloaded CurseForge archive: {e}"))?)
         .map_err(|e| format!("The CurseForge pack is not a valid ZIP archive: {e}"))?;
     let mut manifest_bytes = Vec::new();
-    archive.by_name("manifest.json").map_err(|_| "This CurseForge archive is missing manifest.json.".to_string())?
-        .read_to_end(&mut manifest_bytes).map_err(|e| format!("Could not read CurseForge manifest: {e}"))?;
+    let mut manifest_entry = archive.by_name("manifest.json")
+        .map_err(|_| "This CurseForge archive is missing manifest.json.".to_string())?;
+    if manifest_entry.size() > MAX_PACK_MANIFEST_BYTES {
+        return Err("The CurseForge manifest exceeds NOVA's 16 MiB safety limit.".into());
+    }
+    manifest_entry.read_to_end(&mut manifest_bytes)
+        .map_err(|e| format!("Could not read CurseForge manifest: {e}"))?;
+    drop(manifest_entry);
     let manifest: Value = serde_json::from_slice(&manifest_bytes)
         .map_err(|e| format!("CurseForge manifest is invalid: {e}"))?;
+    drop(archive);
     if manifest["manifestType"].as_str() != Some("minecraftModpack") {
         return Err("The downloaded CurseForge file is not a Minecraft modpack.".into());
     }
@@ -725,30 +1895,196 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
         .and_then(|a| a.iter().find(|v| v["primary"].as_bool() == Some(true)).or_else(|| a.first()))
         .and_then(|v| v["id"].as_str());
     let (loader, loader_build) = if let Some(id) = loader_entry { loader_from_id(id)? } else { ("vanilla".into(), String::new()) };
-    let folder = instance_folder(&name)?;
-    std::fs::create_dir_all(&folder).map_err(|e| format!("Could not create instance folder: {e}"))?;
     let pack_files = manifest["files"].as_array().ok_or("CurseForge manifest has no files list.")?;
-    let total_files = pack_files.iter().filter(|item| item["required"].as_bool() != Some(false)).count() as u64;
-    let mut completed_files = 0u64;
-    emit_pack_progress(&app, "files", 0, total_files, "Downloading CurseForge files");
-    for (i, item) in pack_files.iter().enumerate() {
-        if item["required"].as_bool() == Some(false) { continue; }
-        let project = item["projectID"].as_u64().ok_or("CurseForge project ID is missing.")?;
-        let file = item["fileID"].as_u64().ok_or("CurseForge file ID is missing.")?;
-        let url: String = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}/download-url"))
-            .headers(headers.clone()).send().await.map_err(|e| format!("Could not resolve CurseForge mod {}: {e}", i+1))?
-            .error_for_status().map_err(|e| format!("CurseForge could not provide mod {}: {e}", i+1))?
-            .json::<Value>().await.map_err(|e| format!("CurseForge mod {} response was unreadable: {e}", i+1))?["data"]
-            .as_str().ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}. The author may have disabled third-party downloads."))?.to_owned();
-        let bytes = fetch_bytes(&url).await?;
-        let filename = format!("{project}-{file}.jar");
-        std::fs::create_dir_all(folder.join("mods")).map_err(|e| format!("Could not create mods folder: {e}"))?;
-        atomic_write(&folder.join("mods").join(filename), &bytes)
-            .map_err(|e| format!("Could not save CurseForge mod {}: {e}", i+1))?;
-        completed_files += 1;
-        emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}"));
+    if pack_files.len() > MAX_ARCHIVE_ENTRIES {
+        return Err("The CurseForge manifest contains too many files and was blocked for safety.".into());
     }
-    extract_pack_overrides(&archive_bytes, "overrides/", &folder)?;
+    // Resolve metadata in parallel, then download verified files with a small
+    // bounded worker pool. This avoids hundreds of serial API round-trips while
+    // keeping pressure on CurseForge/CDNs controlled.
+    let required_files: Vec<(usize, u64, u64)> = pack_files.iter().enumerate()
+        .filter(|(_, item)| item["required"].as_bool() != Some(false))
+        .map(|(index, item)| {
+            let project = item["projectID"].as_u64().ok_or("CurseForge project ID is missing.")?;
+            let file = item["fileID"].as_u64().ok_or("CurseForge file ID is missing.")?;
+            Ok((index + 1, project, file))
+        })
+        .collect::<Result<_, String>>()?;
+    let total_files = required_files.len() as u64;
+    let mut total_download_bytes = 0u64;
+    emit_pack_progress(&app, "files", 0, total_files, "Checking mod files");
+
+    let mut metadata_jobs = tokio::task::JoinSet::new();
+    let mut metadata_iter = required_files.into_iter();
+    const MAX_PARALLEL_MOD_DOWNLOADS: usize = 4;
+    for _ in 0..MAX_PARALLEL_MOD_DOWNLOADS {
+        if let Some((number, project, file)) = metadata_iter.next() {
+            let client = client.clone();
+            let headers = headers.clone();
+            let mc_version = mc_version.clone();
+            let loader = loader.clone();
+            let api_key = api_key.clone();
+            metadata_jobs.spawn(async move {
+            let metadata: Value = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}"))
+                .headers(headers.clone()).send().await
+                .map_err(|e| format!("Could not verify CurseForge mod {number}: {e}"))?
+                .error_for_status().map_err(|e| format!("CurseForge could not verify mod {number}: {e}"))?
+                .json().await.map_err(|e| format!("CurseForge mod {number} metadata was unreadable: {e}"))?;
+            let details = &metadata["data"];
+            if details["modId"].as_u64() != Some(project) || details["id"].as_u64() != Some(file) {
+                return Err(format!("CurseForge returned mismatched metadata for mod {project}/{file}."));
+            }
+            let filename = details["fileName"].as_str()
+                .filter(|name| !name.trim().is_empty())
+                .ok_or_else(|| format!("CurseForge did not provide a filename for mod {project}/{file}."))?
+                .to_owned();
+            let expected_size = details["fileLength"].as_u64()
+                .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+                .ok_or_else(|| format!("CurseForge did not provide a valid size for mod {project}/{file}."))?;
+            let expected_sha1 = details["hashes"].as_array()
+                .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
+                .and_then(|hash| hash["value"].as_str())
+                .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+                .ok_or_else(|| format!("CurseForge did not provide a valid SHA-1 checksum for mod {project}/{file}."))?
+                .to_owned();
+
+            let url: String = if let Some(direct_url) = details["downloadUrl"].as_str().filter(|url| url.starts_with("https://")) {
+                direct_url.to_owned()
+            } else {
+                let response = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}/download-url"))
+                    .headers(headers).send().await
+                    .map_err(|e| format!("Could not resolve CurseForge mod {number}: {e}"))?;
+                if response.status() == reqwest::StatusCode::FORBIDDEN {
+                    if let Some(alternate) = resolve_verified_modrinth_fallback(
+                        &client, project, &filename, &mc_version, &loader, &expected_sha1
+                    ).await? {
+                        updater_log(&format!("CurseForge returned HTTP 403 for {filename}; using an exact Modrinth mirror verified by SHA-1."));
+                        alternate
+                    } else {
+                        return Err(format!("CurseForge refused the download URL for required mod {number} ({filename}, {project}/{file}) with HTTP 403. NOVA also checked its verified Modrinth mirror and found no exact Minecraft/loader/file/checksum match. Try another modpack version or install this file through CurseForge."));
+                    }
+                } else {
+                    let payload = response.error_for_status()
+                        .map_err(|e| format!("CurseForge could not provide mod {number}: {e}"))?
+                        .json::<Value>().await
+                        .map_err(|e| format!("CurseForge mod {number} download response was unreadable: {e}"))?;
+                    payload["data"].as_str()
+                        .ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}."))?
+                        .to_owned()
+                }
+            };
+            let download_key = reqwest::Url::parse(&url).ok()
+                .and_then(|parsed| parsed.host_str().map(str::to_owned))
+                .filter(|host| host == "edge.forgecdn.net" || host == "mediafilez.forgecdn.net")
+                .map(|_| api_key);
+            Ok::<_, String>((number, project, file, filename, expected_size, expected_sha1, url, download_key))
+            });
+        }
+    }
+
+    let mut resolved = Vec::with_capacity(total_files as usize);
+    while let Some(result) = metadata_jobs.join_next().await {
+        let entry = result.map_err(|e| format!("CurseForge metadata worker failed: {e}"))??;
+        resolved.push(entry);
+        if let Some((number, project, file)) = metadata_iter.next() {
+            let client = client.clone();
+            let headers = headers.clone();
+            let mc_version = mc_version.clone();
+            let loader = loader.clone();
+            let api_key = api_key.clone();
+            metadata_jobs.spawn(async move {
+                let metadata: Value = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}"))
+                    .headers(headers.clone()).send().await
+                    .map_err(|e| format!("Could not verify CurseForge mod {number}: {e}"))?
+                    .error_for_status().map_err(|e| format!("CurseForge could not verify mod {number}: {e}"))?
+                    .json().await.map_err(|e| format!("CurseForge mod {number} metadata was unreadable: {e}"))?;
+                let details = &metadata["data"];
+                if details["modId"].as_u64() != Some(project) || details["id"].as_u64() != Some(file) {
+                    return Err(format!("CurseForge returned mismatched metadata for mod {project}/{file}."));
+                }
+                let filename = details["fileName"].as_str()
+                    .filter(|name| !name.trim().is_empty())
+                    .ok_or_else(|| format!("CurseForge did not provide a filename for mod {project}/{file}."))?
+                    .to_owned();
+                let expected_size = details["fileLength"].as_u64()
+                    .filter(|size| *size > 0 && *size <= MAX_ARCHIVE_FILE_BYTES)
+                    .ok_or_else(|| format!("CurseForge did not provide a valid size for mod {project}/{file}."))?;
+                let expected_sha1 = details["hashes"].as_array()
+                    .and_then(|hashes| hashes.iter().find(|hash| hash["algo"].as_u64() == Some(1)))
+                    .and_then(|hash| hash["value"].as_str())
+                    .filter(|hash| hash.len() == 40 && hash.chars().all(|c| c.is_ascii_hexdigit()))
+                    .ok_or_else(|| format!("CurseForge did not provide a valid SHA-1 checksum for mod {project}/{file}."))?
+                    .to_owned();
+                let url: String = if let Some(direct_url) = details["downloadUrl"].as_str().filter(|url| url.starts_with("https://")) {
+                    direct_url.to_owned()
+                } else {
+                    let response = client.get(format!("{CURSEFORGE_API}/mods/{project}/files/{file}/download-url"))
+                        .headers(headers).send().await
+                        .map_err(|e| format!("Could not resolve CurseForge mod {number}: {e}"))?;
+                    if response.status() == reqwest::StatusCode::FORBIDDEN {
+                        if let Some(alternate) = resolve_verified_modrinth_fallback(
+                            &client, project, &filename, &mc_version, &loader, &expected_sha1
+                        ).await? {
+                            updater_log(&format!("CurseForge returned HTTP 403 for {filename}; using an exact Modrinth mirror verified by SHA-1."));
+                            alternate
+                        } else {
+                            return Err(format!("CurseForge refused the download URL for required mod {number} ({filename}, {project}/{file}) with HTTP 403. NOVA also checked its verified Modrinth mirror and found no exact Minecraft/loader/file/checksum match. Try another modpack version or install this file through CurseForge."));
+                        }
+                    } else {
+                        let payload = response.error_for_status()
+                            .map_err(|e| format!("CurseForge could not provide mod {number}: {e}"))?
+                            .json::<Value>().await
+                            .map_err(|e| format!("CurseForge mod {number} download response was unreadable: {e}"))?;
+                        payload["data"].as_str()
+                            .ok_or_else(|| format!("CurseForge did not provide a download URL for required mod {project}/{file}."))?
+                            .to_owned()
+                    }
+                };
+                let download_key = reqwest::Url::parse(&url).ok()
+                    .and_then(|parsed| parsed.host_str().map(str::to_owned))
+                    .filter(|host| host == "edge.forgecdn.net" || host == "mediafilez.forgecdn.net")
+                    .map(|_| api_key);
+                Ok::<_, String>((number, project, file, filename, expected_size, expected_sha1, url, download_key))
+            });
+        }
+    }
+    for entry in &resolved {
+        total_download_bytes = total_download_bytes.checked_add(entry.4)
+            .ok_or("CurseForge pack download size overflowed.")?;
+    }
+    if total_download_bytes > MAX_ARCHIVE_TOTAL_BYTES {
+        return Err("The CurseForge pack's required downloads exceed NOVA's 2 GiB safety limit.".into());
+    }
+
+    std::fs::create_dir_all(folder.join("mods"))
+        .map_err(|e| format!("Could not create mods folder: {e}"))?;
+    let mut download_jobs = tokio::task::JoinSet::new();
+    let mut next = resolved.into_iter();
+    let mut completed_files = 0u64;
+
+    for _ in 0..MAX_PARALLEL_MOD_DOWNLOADS {
+        if let Some(entry) = next.next() {
+            let app = app.clone();
+            let folder = folder.clone();
+            download_jobs.spawn(async move {
+                download_one_curseforge_mod(app, folder, entry).await
+            });
+        }
+    }
+    while let Some(result) = download_jobs.join_next().await {
+        let downloaded = result.map_err(|e| format!("CurseForge download worker failed: {e}"))??;
+        completed_files += 1;
+        emit_pack_progress(&app, "files", completed_files, total_files, &format!("Downloaded file {completed_files} of {total_files}: {downloaded}"));
+        if let Some(entry) = next.next() {
+            let app = app.clone();
+            let folder = folder.clone();
+            download_jobs.spawn(async move {
+                download_one_curseforge_mod(app, folder, entry).await
+            });
+        }
+    }
+    extract_pack_overrides(&archive_path, "overrides/", &folder)?;
+    let _ = std::fs::remove_file(&archive_path);
     let title = manifest["name"].as_str().filter(|s| !s.trim().is_empty()).unwrap_or(&name).to_owned();
     save_instance_metadata(&folder, json!({
         "instanceName":name,"name":title,"minecraftVersion":mc_version,"loader":loader,
@@ -758,38 +2094,9 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
 
 
 #[tauri::command]
-fn read_game_log(instance_name: Option<String>) -> Result<String, String> {
-    let local = std::env::var("LOCALAPPDATA").map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
-    let root = PathBuf::from(local).join("NOVA Client").join("minecraft");
-    let mut candidates = Vec::new();
-    if let Some(name) = instance_name.as_deref() {
-        let safe = safe_instance_name(name)?;
-        candidates.push(root.join("instances").join(&safe).join("logs").join("latest.log"));
-        candidates.push(instance_folder(&safe)?.join("logs").join("latest.log"));
-    }
-    candidates.push(root.join("logs").join("latest.log"));
-    for path in candidates {
-        if path.is_file() { return std::fs::read_to_string(&path).map_err(|e| format!("Could not read Minecraft game log: {e}")); }
-    }
-    Ok(String::new())
-}
-
-fn clear_game_log(instance_name: Option<&str>) -> Result<(), String> {
-    let local = std::env::var("LOCALAPPDATA").map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
-    let root = PathBuf::from(local).join("NOVA Client").join("minecraft");
-    let mut candidates = vec![root.join("logs").join("latest.log")];
-    if let Some(name) = instance_name {
-        let safe = safe_instance_name(name)?;
-        candidates.push(root.join("instances").join(&safe).join("logs").join("latest.log"));
-        candidates.push(instance_folder(&safe)?.join("logs").join("latest.log"));
-    }
-    for path in candidates { if path.is_file() { std::fs::remove_file(&path).map_err(|e| format!("Could not reset the previous Minecraft log: {e}"))?; } }
-    Ok(())
-}
-
-#[tauri::command]
 fn create_instance(instance_name: String, display_name: String, version: String, loader: String) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
+    let _reservation = InstanceReservation::acquire(name.clone())?;
     let version = version.trim();
     if version.is_empty() || version.eq_ignore_ascii_case("null") || version.eq_ignore_ascii_case("undefined") {
         return Err("Choose a valid Minecraft version.".into());
@@ -818,7 +2125,13 @@ fn create_instance(instance_name: String, display_name: String, version: String,
         "loaderVersion": loader_version,
         "source": "custom"
     });
-    save_instance_metadata(&folder, metadata)
+    match save_instance_metadata(&folder, metadata) {
+        Ok(saved) => Ok(saved),
+        Err(error) => {
+            let _ = std::fs::remove_dir_all(&folder);
+            Err(error)
+        }
+    }
 }
 
 #[tauri::command]
@@ -866,24 +2179,147 @@ fn list_instances() -> Result<Vec<Value>, String> {
 }
 
 #[tauri::command]
+fn set_instance_icon(instance_name: String, icon_url: String) -> Result<(), String> {
+    let folder = instance_folder(&instance_name)?;
+    let metadata_path = folder.join("nova-instance.json");
+    let bytes = std::fs::read(&metadata_path)
+        .map_err(|e| format!("Could not read modpack metadata: {e}"))?;
+    let mut metadata: Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("Modpack metadata is invalid: {e}"))?;
+    let parsed = reqwest::Url::parse(&icon_url)
+        .map_err(|_| "The modpack icon URL is invalid.".to_string())?;
+    if parsed.scheme() != "https" {
+        return Err("Modpack icons must use a secure HTTPS URL.".into());
+    }
+    metadata["iconUrl"] = Value::String(icon_url);
+    let serialized = serde_json::to_vec_pretty(&metadata)
+        .map_err(|e| format!("Could not encode modpack metadata: {e}"))?;
+    std::fs::write(&metadata_path, serialized)
+        .map_err(|e| format!("Could not save modpack icon: {e}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn list_instance_content(instance_name: String) -> Result<Vec<Value>, String> {
+    let folder = instance_folder(&instance_name)?;
+    let mods_dir = folder.join("mods");
+    if !mods_dir.exists() { return Ok(Vec::new()); }
+    let entries = std::fs::read_dir(&mods_dir)
+        .map_err(|e| format!("Could not read this instance's mods folder: {e}"))?;
+    let mut files = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| format!("Could not read a mod entry: {e}"))?;
+        let path = entry.path();
+        if !path.is_file() || !path.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("jar")) { continue; }
+        let metadata = entry.metadata().map_err(|e| format!("Could not inspect mod file: {e}"))?;
+        files.push(json!({
+            "name": path.file_name().and_then(|v| v.to_str()).unwrap_or("Unknown mod"),
+            "size": metadata.len()
+        }));
+        if files.len() >= 500 { break; }
+    }
+    files.sort_by(|a,b| a["name"].as_str().unwrap_or("").to_lowercase().cmp(&b["name"].as_str().unwrap_or("").to_lowercase()));
+    Ok(files)
+}
+
+#[tauri::command]
 fn delete_instance(instance_name: String) -> Result<(), String> {
     let name = safe_instance_name(&instance_name)?;
     let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
-    if active.lock().map_err(|_| "Could not inspect running Minecraft processes.")?.contains(&name) {
-        return Err("This instance is currently running. Close Minecraft before deleting it.".into());
+    // Hold the operation lock through deletion so launch/install cannot start
+    // after the running check but before the directory is removed.
+    let operations = active.lock().map_err(|_| "Could not inspect running Minecraft processes.")?;
+    if operations.contains(&name) {
+        return Err("This instance is currently running or being modified. Close Minecraft and try again.".into());
     }
     let folder = instance_folder(&name)?;
     if folder.exists() {
         std::fs::remove_dir_all(&folder)
             .map_err(|e| format!("Could not delete instance files: {e}"))?;
     }
+    drop(operations);
     Ok(())
 }
 
 
+#[tauri::command]
+fn delete_application_data() -> Result<(), String> {
+    let active = ACTIVE_LAUNCHES.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    let operations = active.lock().map_err(|_| "Could not inspect active Minecraft operations.")?;
+    if !operations.is_empty() {
+        return Err("Close Minecraft and wait for all installs to finish before deleting application data.".into());
+    }
+
+    let local_app_data = std::env::var_os("LOCALAPPDATA")
+        .ok_or_else(|| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
+    let app_data = PathBuf::from(local_app_data).join("NOVA Client");
+    if app_data.exists() {
+        std::fs::remove_dir_all(&app_data)
+            .map_err(|e| format!("Could not delete NOVA application data: {e}"))?;
+    }
+    drop(operations);
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{safe_instance_name, safe_relative_path};
+    use super::{curseforge_loader_matches, modrinth_minecraft_version, safe_instance_name, safe_relative_path, InstanceReservation, TEMP_FILE_COUNTER};
+    use serde_json::json;
+
+    #[test]
+    fn curseforge_cdn_authentication_is_limited_to_official_https_hosts() {
+        assert!(super::is_curseforge_cdn_url("https://edge.forgecdn.net/files/1/2/mod.jar"));
+        assert!(super::is_curseforge_cdn_url("https://mediafilez.forgecdn.net/files/1/2/mod.jar"));
+        assert!(!super::is_curseforge_cdn_url("http://edge.forgecdn.net/files/1/2/mod.jar"));
+        assert!(!super::is_curseforge_cdn_url("https://example.com/mod.jar"));
+        assert!(!super::is_curseforge_cdn_url("https://mediafilez.forgecdn.net.evil.example/mod.jar"));
+        assert!(!super::is_curseforge_cdn_url("https://edge.forgecdn.net.evil.example/mod.jar"));
+    }
+
+    #[test]
+    fn updater_compares_release_versions_numerically() {
+        assert!(super::version_is_newer("0.1.1", "0.1.0"));
+        assert!(super::version_is_newer("1.0.0", "0.9.99"));
+        assert!(!super::version_is_newer("0.1.0", "0.1.0"));
+        assert!(!super::version_is_newer("0.1.0", "0.1.1"));
+        assert!(super::version_is_newer("v0.2.0", "0.1.9"));
+    }
+
+    #[test]
+    fn modrinth_minecraft_version_prefers_manifest_dependency() {
+        let index = json!({"dependencies":{"minecraft":{"version":"1.21.1"}}});
+        let version = json!({"game_versions":["1.20.1"]});
+        assert_eq!(modrinth_minecraft_version(&index, &version).unwrap(), "1.21.1");
+    }
+
+    #[test]
+    fn modrinth_minecraft_version_falls_back_to_selected_version_metadata() {
+        let index = json!({"dependencies":{}});
+        let version = json!({"game_versions":["1.21.4","1.21.3"]});
+        assert_eq!(modrinth_minecraft_version(&index, &version).unwrap(), "1.21.4");
+    }
+
+    #[test]
+    fn modrinth_minecraft_version_rejects_missing_metadata() {
+        let index = json!({"dependencies":{}});
+        let version = json!({"game_versions":[]});
+        assert!(modrinth_minecraft_version(&index, &version).is_err());
+    }
+
+    #[test]
+    fn atomic_write_replaces_existing_metadata_on_windows() {
+        let root = std::env::temp_dir().join(format!(
+            "nova-atomic-write-test-{}-{}",
+            std::process::id(),
+            TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let target = root.join("nova-instance.json");
+        std::fs::write(&target, b"old metadata").unwrap();
+        super::atomic_write(&target, b"new metadata").unwrap();
+        assert_eq!(std::fs::read(&target).unwrap(), b"new metadata");
+        let _ = std::fs::remove_dir_all(root);
+    }
 
     #[test]
     fn instance_names_strip_unsafe_characters() {
@@ -908,8 +2344,38 @@ mod tests {
     }
 
     #[test]
+    fn curseforge_loader_types_are_checked() {
+        assert!(curseforge_loader_matches(4, "fabric"));
+        assert!(curseforge_loader_matches(1, "forge"));
+        assert!(curseforge_loader_matches(6, "neoforge"));
+        assert!(curseforge_loader_matches(5, "quilt"));
+        assert!(curseforge_loader_matches(0, "fabric"));
+        assert!(!curseforge_loader_matches(1, "fabric"));
+        assert!(!curseforge_loader_matches(4, "forge"));
+    }
+
+    #[test]
+    fn instance_reservations_prevent_conflicting_operations_and_release() {
+        let key = format!("reservation-test-{}", TEMP_FILE_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed));
+        let first = InstanceReservation::acquire(key.clone()).unwrap();
+        assert!(InstanceReservation::acquire(key.clone()).is_err());
+        drop(first);
+        assert!(InstanceReservation::acquire(key).is_ok());
+    }
+
+    #[test]
     fn relative_paths_accept_normal_mod_paths() {
         assert!(safe_relative_path("mods/example.jar").is_ok());
+    }
+
+    #[test]
+    fn relative_paths_reject_windows_special_names_and_streams() {
+        assert!(safe_relative_path("mods/CON.jar").is_err());
+        assert!(safe_relative_path("mods/NUL").is_err());
+        assert!(safe_relative_path("mods/example.jar:payload").is_err());
+        assert!(safe_relative_path("mods/trailing.").is_err());
+        assert!(safe_relative_path("mods/trailing ").is_err());
+        assert!(safe_relative_path("mods/bad?.jar").is_err());
     }
 }
 
@@ -920,17 +2386,24 @@ fn main() {
             begin_microsoft_login,
             minecraft_account_name,
             sign_out_minecraft,
+            check_for_updates,
+            install_update,
+            get_updater_logs,
+            get_game_logs,
             minecraft_versions,
             launch_minecraft,
             stop_minecraft,
-            read_game_log,
             prepare_modpack_instance,
             install_modrinth_modpack,
             curseforge_modpack_versions,
             install_curseforge_modpack,
+            install_mod_to_instance,
             create_instance,
             list_instances,
-            delete_instance
+            set_instance_icon,
+            list_instance_content,
+            delete_instance,
+            delete_application_data
         ])
         .run(tauri::generate_context!())
         .expect("error while running NOVA Client");
