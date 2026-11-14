@@ -154,5 +154,11 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .game-log-panel{margin:0 0 8px;padding:14px 16px;background:rgba(7,10,19,.72);border:1px solid rgba(143,157,190,.18);border-radius:0 0 12px 12px;min-width:0}
 .game-log-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:10px;color:#cbd5e8;font-size:11px;letter-spacing:.08em;font-weight:700}
 .game-log-heading>div{display:flex;align-items:center;gap:8px}.game-log-heading>span{color:#7f8ba3;font-size:10px;letter-spacing:0;font-weight:500}
-.game-log-content{margin:0;max-height:300px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#c3cbe0;font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;scrollbar-width:thin}
+.game-log-content{margin:0;height:min(56vh,560px);min-height:320px;max-height:560px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;color:#c3cbe0;font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;scrollbar-width:thin}
 .game-log-error{color:#ff8d98;font-size:12px;margin-bottom:8px}
+
+/* Clear running state for installed instances */
+.stop-btn{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:34px;padding:0 13px;border:1px solid #ff687566;border-radius:8px;background:linear-gradient(135deg,#d94758,#a9273d);color:#fff;font:inherit;font-size:11px;font-weight:750;cursor:pointer;box-shadow:0 5px 18px #d9475830}
+.stop-btn:hover{background:linear-gradient(135deg,#ed5364,#bd3047);border-color:#ff8791}
+.instance-entry-wrap .game-log-panel{width:100%;box-sizing:border-box}
+.instance-entry{flex-wrap:wrap}
