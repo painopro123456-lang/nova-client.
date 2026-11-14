@@ -11,14 +11,9 @@ on:
       - "index.html"
       - "vite.config.js"
       - ".github/workflows/windows-build.yml"
-  workflow_run:
-    workflows: ["Frontend validation"]
-    types: [completed]
-    branches: [main]
-
 concurrency:
   group: nova-windows-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 permissions:
   contents: read
