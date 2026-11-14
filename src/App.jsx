@@ -232,7 +232,7 @@ function Catalog({ packs, active, memoryMb, signedIn, installDialog, setInstallD
       <div className="pack-install-row">{packs&&installed[provider+":"+String(x.id)]
         ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":signedIn?"Install & Play":"Downloaded · Sign in to play"}</button>
         : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :packs?"Install Modpack":"Install to instance"}</button>}</div>
-    </article>)}</div>}
+    </article>)}</div>
     {versionProject&&<div className="pack-version-backdrop" role="presentation" onClick={()=>!packVersionsBusy&&setVersionProject(null)}>
       <section className={"pack-version-dialog"+(packs?" modpack-version-dialog":"")} role="dialog" aria-modal="true" aria-labelledby="pack-version-title" onClick={e=>e.stopPropagation()}>
         <div className="pack-version-dialog-top"><div><div className="eyebrow">{packs?"NOVA MODPACK INSTALLER":"NOVA MOD INSTALLER"}</div><h3 id="pack-version-title">{packs?"Choose your modpack version":"Choose a mod version"}</h3><p>{versionProject.title} · {provider==="modrinth"?"Modrinth":"CurseForge"}</p></div><button className="pack-version-close" onClick={()=>setVersionProject(null)} aria-label="Close version picker"><X size={17}/></button></div>
