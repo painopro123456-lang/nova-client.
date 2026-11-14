@@ -1,5 +1,6 @@
 import { MICROSOFT_CLIENT_ID } from "./config";
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -212,24 +213,21 @@ function Catalog({ packs, active, memoryMb }) {
         ? <button className="primary-btn" onClick={()=>launchPack(installed[provider+":"+String(x.id)])} disabled={Boolean(installingId)}><Play size={14} fill="currentColor"/> {installingId===String(x.id)?"Launching…":"Install & Play"}</button>
         : <button className="primary-btn" onClick={()=>choosePackVersion(x)} disabled={Boolean(installingId)}><ArrowDownToLine size={14}/> {installingId===String(x.id)?"Installing…" :"Choose version"}</button>}</div>}
     </article>)}</div>}
-    {installDialog&&<div className="pack-version-backdrop install-progress-backdrop" role="presentation">
-      <section className="pack-version-dialog install-progress-dialog" role="dialog" aria-modal="true" aria-labelledby="install-progress-title">
-        <div className="eyebrow">NOVA / MODPACK INSTALLER</div>
-        <h3 id="install-progress-title">{installDialog.done?(installDialog.error?"Installation stopped":"You're all set"):"Installing your modpack"}</h3>
+    {installDialog&&createPortal(
+      <section className={"install-progress-toast"+(installDialog.done?" is-done":"")} role="status" aria-live="polite" aria-labelledby="install-progress-title">
+        <div className="install-toast-heading">
+          <div><div className="eyebrow">NOVA / MODPACK INSTALLER</div><h3 id="install-progress-title">{installDialog.done?(installDialog.error?"Installation failed":"Modpack ready"):"Installing modpack"}</h3></div>
+          {installDialog.done&&<button className="install-toast-close" onClick={()=>setInstallDialog(null)} aria-label="Dismiss notification"><X size={16}/></button>}
+        </div>
         <p className="install-progress-name">{installDialog.name}</p>
         <div className="install-progress-track"><div className={"install-progress-fill"+(!installDialog.done?" is-active":"")} style={{width:(installDialog.done?100:(typeof installDialog.progress==="number"?installDialog.progress:32))+"%"}}/></div>
-        <div className="install-progress-percent">{typeof installDialog.progress==="number"?installDialog.progress+"%":"Working…"}</div>
-        <div className="install-progress-status"><span className={installDialog.done?(installDialog.error?"progress-failed":"progress-complete"):"progress-running"}>{installDialog.done?(installDialog.error?"!":"✓"):""}</span><b>{installDialog.status}</b></div>
+        <div className="install-toast-meta"><b>{installDialog.status}</b><span>{typeof installDialog.progress==="number"?installDialog.progress+"%":(installDialog.done?"100%":"Working…")}</span></div>
         <p className="install-progress-detail">{installDialog.detail}</p>
-        <div className="install-progress-steps">
-          <div className={installDialog.step>=0?"complete":""}><span>1</span><label>Modpack files</label></div>
-          <div className={installDialog.step>=1?"complete":""}><span>2</span><label>Minecraft & Java</label></div>
-          <div className={installDialog.step>=2?"complete":""}><span>3</span><label>Ready to play</label></div>
-        </div>
         {installDialog.error&&<div className="install-progress-error">{installDialog.error}</div>}
-        {installDialog.done&&<div className="pack-version-actions"><button className="primary-btn" onClick={()=>setInstallDialog(null)}>Close</button></div>}
-      </section>
-    </div>}
+        {!installDialog.done&&<div className="install-toast-foot"><span className="install-toast-pulse"/> You can keep using NOVA while this runs</div>}
+      </section>,
+      document.body
+    )}
     {versionProject&&<div className="pack-version-backdrop" role="presentation" onClick={()=>!packVersionsBusy&&setVersionProject(null)}>
       <section className="pack-version-dialog" role="dialog" aria-modal="true" aria-labelledby="pack-version-title" onClick={e=>e.stopPropagation()}>
         <div className="eyebrow">MODPACK INSTALLER</div><h3 id="pack-version-title">Choose a version</h3><p>Select the exact modpack release you want NOVA to install. The Minecraft version and mod loader are included in each option.</p>
