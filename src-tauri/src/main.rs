@@ -374,6 +374,7 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
             return Err("This Minecraft instance is already running.".into());
         }
     }
+    clear_game_log(instance_name.as_deref())?;
     let mut child = match launch.run().await {
         Ok(child) => child,
         Err(error) => {
@@ -729,6 +730,36 @@ async fn install_curseforge_modpack(app: tauri::AppHandle, mod_id: String, insta
 
 
 #[tauri::command]
+fn read_game_log(instance_name: Option<String>) -> Result<String, String> {
+    let local = std::env::var("LOCALAPPDATA").map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
+    let root = PathBuf::from(local).join("NOVA Client").join("minecraft");
+    let mut candidates = Vec::new();
+    if let Some(name) = instance_name.as_deref() {
+        let safe = safe_instance_name(name)?;
+        candidates.push(root.join("instances").join(&safe).join("logs").join("latest.log"));
+        candidates.push(instance_folder(&safe)?.join("logs").join("latest.log"));
+    }
+    candidates.push(root.join("logs").join("latest.log"));
+    for path in candidates {
+        if path.is_file() { return std::fs::read_to_string(&path).map_err(|e| format!("Could not read Minecraft game log: {e}")); }
+    }
+    Ok(String::new())
+}
+
+fn clear_game_log(instance_name: Option<&str>) -> Result<(), String> {
+    let local = std::env::var("LOCALAPPDATA").map_err(|_| "Windows LOCALAPPDATA folder could not be found.".to_string())?;
+    let root = PathBuf::from(local).join("NOVA Client").join("minecraft");
+    let mut candidates = vec![root.join("logs").join("latest.log")];
+    if let Some(name) = instance_name {
+        let safe = safe_instance_name(name)?;
+        candidates.push(root.join("instances").join(&safe).join("logs").join("latest.log"));
+        candidates.push(instance_folder(&safe)?.join("logs").join("latest.log"));
+    }
+    for path in candidates { if path.is_file() { std::fs::remove_file(&path).map_err(|e| format!("Could not reset the previous Minecraft log: {e}"))?; } }
+    Ok(())
+}
+
+#[tauri::command]
 fn create_instance(instance_name: String, display_name: String, version: String, loader: String) -> Result<Value, String> {
     let name = safe_instance_name(&instance_name)?;
     let version = version.trim();
@@ -863,6 +894,7 @@ fn main() {
             sign_out_minecraft,
             minecraft_versions,
             launch_minecraft,
+            read_game_log,
             prepare_modpack_instance,
             install_modrinth_modpack,
             curseforge_modpack_versions,
