@@ -2,6 +2,17 @@ name: Windows build
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish this build as a GitHub release"
+        required: false
+        type: boolean
+        default: false
+      release_version:
+        description: "Release version (without v), e.g. 0.1.316"
+        required: false
+        type: string
+        default: "0.1.316"
   push:
     branches: [main]
     paths:
@@ -16,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
