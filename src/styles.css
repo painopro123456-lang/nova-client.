@@ -524,3 +524,23 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .nova-stop-button:hover:not(:disabled){background:#b91f2d;transform:translateY(-1px)}
 .nova-stop-button:disabled{opacity:.65;cursor:wait}
 .nova-launch-status.phase-stopping b{background:#59252c;color:#ffabb4}
+
+
+/* Compact, independently scrollable logs: keep the page short while retaining auto-follow. */
+.nova-pack-logs .nova-log-viewer{
+  height:260px!important;
+  min-height:0!important;
+  max-height:260px!important;
+  overflow-y:auto!important;
+  overflow-x:hidden!important;
+  overscroll-behavior:contain;
+  padding:6px 0;
+}
+.nova-pack-logs .nova-log-row{
+  gap:8px;
+  padding:3px 10px;
+  line-height:1.35;
+}
+.nova-pack-logs .nova-log-message{
+  line-height:1.35;
+}
