@@ -11,6 +11,10 @@ on:
       - "index.html"
       - "vite.config.js"
       - ".github/workflows/windows-build.yml"
+  workflow_run:
+    workflows: ["Frontend validation"]
+    types: [completed]
+    branches: [main]
 
 concurrency:
   group: nova-windows-${{ github.ref }}
@@ -21,6 +25,7 @@ permissions:
 
 jobs:
   build:
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -117,6 +122,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: NOVA-Client-Windows-Installer
-          path: D:/a/nova-src\\src-tauri\\target\\release\\bundle\\nsis\\NOVA-Client-Setup.exe
+          path: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe
           if-no-files-found: error
           retention-days: 14
