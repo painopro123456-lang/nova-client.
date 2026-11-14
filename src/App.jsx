@@ -263,7 +263,12 @@ function LocalInstances({ versions, memoryMb, setPage }) {
   const [loader,setLoader]=useState("fabric");
   const [action,setAction]=useState("");
   const [instancePanel,setInstancePanel]=useState(null);
-  const [launchState,setLaunchState]=useState(null);
+  const [launchState,setLaunchStateRaw]=useState(()=>{try{return JSON.parse(localStorage.getItem("nova.launchState")||"null")}catch{return null}});
+  const setLaunchState=next=>setLaunchStateRaw(current=>{
+    const value=typeof next==="function"?next(current):next;
+    try{if(value)localStorage.setItem("nova.launchState",JSON.stringify(value));else localStorage.removeItem("nova.launchState")}catch{}
+    return value;
+  });
   const [selectedInstance,setSelectedInstance]=useState(null);
   const [selectedInstanceTab,setSelectedInstanceTab]=useState("content");
   const [showCustom,setShowCustom]=useState(false);
@@ -453,7 +458,7 @@ function LogViewer({ text: raw, maxHeight=260 }) {
     const node=logRef.current;
     if(node&&followLatest.current)node.scrollTop=node.scrollHeight;
   },[raw]);
-  const rows=String(raw||"").split(/\r?\n/).filter(Boolean).slice(-1000);
+  const rows=String(raw||"").split(/\r?\n/).filter(Boolean).slice(-250);
   const parsed=rows.map((line,index)=>{
     let time="";
     let message=line;
@@ -657,6 +662,18 @@ export default function App() {
           setMessage(result.success
             ? "Minecraft has closed."
             : "Minecraft exited unexpectedly. Check the game log for the crash details.");
+          // Keep the instance launch result even when the Instances page is unmounted.
+          try {
+            const previous = JSON.parse(localStorage.getItem("nova.launchState") || "null");
+            if (previous && previous.instanceName === result.instanceName && ["starting","running","stopping"].includes(previous.phase)) {
+              const phase = previous.phase === "stopping" || result.success ? "closed" : "crashed";
+              localStorage.setItem("nova.launchState", JSON.stringify({
+                ...previous,
+                phase,
+                message: phase === "closed" ? (previous.phase === "stopping" ? "Minecraft stopped." : "Minecraft closed.") : "Minecraft exited unexpectedly. Check the logs for the error."
+              }));
+            }
+          } catch {}
         }
       });
       if (alive) offGameExit = stopGameExit; else stopGameExit();
