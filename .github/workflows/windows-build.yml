@@ -2,6 +2,17 @@ name: Windows build
 
 on:
   workflow_dispatch:
+    inputs:
+      publish_release:
+        description: "Publish this build as a GitHub release"
+        required: false
+        type: boolean
+        default: false
+      release_version:
+        description: "Release version (without v), e.g. 0.1.316"
+        required: false
+        type: string
+        default: "0.1.316"
   push:
     branches: [main]
     paths:
@@ -16,7 +27,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -27,7 +38,7 @@ jobs:
       - name: Clone source to a Windows-safe path
         shell: pwsh
         working-directory: D:/a
-        run: git clone --depth 1 https://github.com/painopro123456-lang/nova-client..git nova-src
+        run: git clone --depth 1 --branch "$env:GITHUB_REF_NAME" https://github.com/painopro123456-lang/nova-client..git nova-src
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -120,3 +131,13 @@ jobs:
           path: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe
           if-no-files-found: error
           retention-days: 14
+
+      - name: Publish updater release
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.release_version }}
+          target_commitish: main
+          name: NOVA Client v${{ inputs.release_version }}
+          generate_release_notes: true
+          files: D:/a/nova-src/src-tauri/target/release/bundle/nsis/NOVA-Client-Setup.exe

@@ -403,16 +403,16 @@ async fn install_update_inner(app: tauri::AppHandle) -> Result<(), String> {
     let installer = std::env::temp_dir().join(format!("NOVA-Client-Update-{}.exe", std::process::id()));
     std::fs::write(&installer, &bytes).map_err(|e| format!("Could not save the NOVA installer: {e}"))?;
 
-    // A small detached PowerShell helper waits for NOVA to exit, runs the
-    // NSIS installer silently, then relaunches the same installed executable.
-    // If setup fails, it still reopens the existing launcher.
+    // Detached helper waits for this process, runs NSIS, checks its exit
+    // code, and only reports success/relaunches after the installer succeeds.
     let executable = std::env::current_exe()
         .map_err(|e| format!("Could not locate the installed NOVA launcher: {e}"))?;
     let quote_ps = |path: &Path| format!("'{}'", path.to_string_lossy().replace('\'', "''"));
     let script = std::env::temp_dir().join(format!("NOVA-Client-Update-{}.ps1", std::process::id()));
+    let log_path = updater_log_path();
     let script_contents = format!(
-        "$ErrorActionPreference = 'Continue'\n$launcherPid = {}\nwhile (Get-Process -Id $launcherPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 300 }}\n$setup = Start-Process -FilePath {} -ArgumentList '/S' -Wait -PassThru\nStart-Process -FilePath {}\nRemove-Item -LiteralPath $PSCommandPath -Force\n",
-        std::process::id(), quote_ps(&installer), quote_ps(&executable)
+        "$ErrorActionPreference = 'Stop'\n$launcherPid = {}\n$log = {}\n$installer = {}\n$exe = {}\ntry {{\n  while (Get-Process -Id $launcherPid -ErrorAction SilentlyContinue) {{ Start-Sleep -Milliseconds 300 }}\n  $process = Start-Process -FilePath $installer -ArgumentList '/S' -Wait -PassThru\n  if ($process.ExitCode -notin @(0, 1641, 3010)) {{ throw \"NSIS installer exited with code $($process.ExitCode)\" }}\n  Add-Content -LiteralPath $log -Value ('[updater] Installer completed successfully; exit code ' + $process.ExitCode)\n  Start-Process -FilePath $exe\n}} catch {{\n  Add-Content -LiteralPath $log -Value ('[updater] Installer failed: ' + $_.Exception.Message)\n  if (Test-Path -LiteralPath $exe) {{ Start-Process -FilePath $exe }}\n}} finally {{ Remove-Item -LiteralPath $installer -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath $PSCommandPath -Force -ErrorAction SilentlyContinue }}\n",
+        std::process::id(), quote_ps(&log_path), quote_ps(&installer), quote_ps(&executable)
     );
     std::fs::write(&script, script_contents)
         .map_err(|e| format!("Could not prepare the NOVA restart helper: {e}"))?;
