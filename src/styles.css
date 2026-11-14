@@ -558,3 +558,14 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .nova-global-launch-status.phase-running .nova-global-launch-dot{background:#54d68b;box-shadow:0 0 0 4px #54d68b20}
 .nova-global-launch-status.phase-stopping .nova-global-launch-dot{background:#ff6873;box-shadow:0 0 0 4px #ff687320}
 @media(max-width:700px){.nova-global-launch-status{margin:10px 12px 0}}
+
+/* Keep log panels scrollable without the bright native scrollbar strip. */
+.nova-pack-logs .nova-log-viewer{
+  scrollbar-width:none;
+  -ms-overflow-style:none;
+}
+.nova-pack-logs .nova-log-viewer::-webkit-scrollbar{
+  display:none;
+  width:0;
+  height:0;
+}
