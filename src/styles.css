@@ -544,3 +544,17 @@ body{background:radial-gradient(ellipse at 75% -18%,rgba(117,91,210,.19),transpa
 .nova-pack-logs .nova-log-message{
   line-height:1.35;
 }
+
+
+.nova-global-launch-status{
+  display:flex;align-items:center;gap:10px;flex-wrap:wrap;
+  margin:12px 28px 0;padding:10px 14px;
+  border:1px solid rgba(255,255,255,.12);border-radius:10px;
+  background:#20252d;color:#e7edf5;font-size:12px;
+}
+.nova-global-launch-status b{font-size:12px;color:#f4f6f9}
+.nova-global-launch-status>span:last-child{color:#aeb9c8}
+.nova-global-launch-dot{width:8px;height:8px;flex:none;border-radius:50%;background:#e8b44c;box-shadow:0 0 0 4px #e8b44c20}
+.nova-global-launch-status.phase-running .nova-global-launch-dot{background:#54d68b;box-shadow:0 0 0 4px #54d68b20}
+.nova-global-launch-status.phase-stopping .nova-global-launch-dot{background:#ff6873;box-shadow:0 0 0 4px #ff687320}
+@media(max-width:700px){.nova-global-launch-status{margin:10px 12px 0}}
