@@ -39,6 +39,7 @@ const MAX_ARCHIVE_ENTRIES: usize = 20_000;
 const MAX_ARCHIVE_FILE_BYTES: u64 = 512 * 1024 * 1024;
 const MAX_ARCHIVE_TOTAL_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 static ACTIVE_LAUNCHES: OnceLock<Mutex<std::collections::HashSet<String>>> = OnceLock::new();
+static ACTIVE_PROCESS_IDS: OnceLock<Mutex<std::collections::HashMap<String, u32>>> = OnceLock::new();
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 fn http_client() -> Result<reqwest::Client, String> {
@@ -383,10 +384,18 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
         }
     };
 
+    // Keep the process ID so the Stop button can terminate Minecraft and its child processes.
+    if let Some(pid) = child.id() {
+        let pids = ACTIVE_PROCESS_IDS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+        if let Ok(mut running) = pids.lock() { running.insert(launch_key.clone(), pid); }
+    }
     // Supervise the child and release the instance lock when the game exits.
     tokio::spawn(async move {
         let exit = child.wait().await;
         if let Ok(mut running) = active.lock() { running.remove(&launch_key); }
+        if let Some(pids) = ACTIVE_PROCESS_IDS.get() {
+            if let Ok(mut running) = pids.lock() { running.remove(&launch_key); }
+        }
         let (success, code) = match exit {
             Ok(status) => (status.success(), status.code()),
             Err(_) => (false, None),
@@ -396,6 +405,25 @@ async fn launch_minecraft(app: tauri::AppHandle, version: String, loader: Option
     Ok(())
 }
 
+
+#[tauri::command]
+fn stop_minecraft(instance_name: String) -> Result<(), String> {
+    let name = safe_instance_name(&instance_name)?;
+    let pids = ACTIVE_PROCESS_IDS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
+    let pid = pids.lock()
+        .map_err(|_| "Could not inspect running Minecraft processes.")?
+        .get(&name).copied()
+        .ok_or_else(|| "This Minecraft instance is not currently running.".to_string())?;
+    let output = std::process::Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .output()
+        .map_err(|e| format!("Could not stop Minecraft: {e}"))?;
+    if !output.status.success() {
+        let detail = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+        return Err(if detail.is_empty() { "Windows could not stop the Minecraft process.".into() } else { detail });
+    }
+    Ok(())
+}
 
 fn emit_pack_progress(app: &tauri::AppHandle, phase: &str, completed: u64, total: u64, detail: &str) {
     let percent = if total > 0 { Some(((completed as f64 / total as f64) * 90.0).round() as u32) } else { None };
@@ -894,6 +922,7 @@ fn main() {
             sign_out_minecraft,
             minecraft_versions,
             launch_minecraft,
+            stop_minecraft,
             read_game_log,
             prepare_modpack_instance,
             install_modrinth_modpack,
